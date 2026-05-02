@@ -1,0 +1,33 @@
+# ── Dependencias ──────────────────────────────────────
+node_modules/
+backend/venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# ── Variables de entorno ──────────────────────────────
+.env
+.env.local
+.env.*.local
+
+# ── Build outputs ─────────────────────────────────────
+frontend/.next/
+frontend/out/
+*.egg-info/
+dist/
+build/
+
+# ── IDE / OS ──────────────────────────────────────────
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# ── Logs / Cache ──────────────────────────────────────
+*.log
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
