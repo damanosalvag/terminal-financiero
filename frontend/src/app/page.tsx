@@ -1,0 +1,260 @@
+"use client";
+
+import { useCallback, useEffect, useState } from "react";
+import {
+  type PortfolioSummary,
+  type PositionAnalysis,
+  closePosition,
+  getPortfolioSummary,
+} from "./api";
+
+type ViewState = "loading" | "error" | "success";
+
+export default function Dashboard() {
+  const [viewState, setViewState] = useState<ViewState>("loading");
+  const [errorMessage, setErrorMessage] = useState("");
+  const [summary, setSummary] = useState<PortfolioSummary | null>(null);
+
+  const fetchSummary = useCallback(async () => {
+    setViewState("loading");
+    try {
+      const data = await getPortfolioSummary();
+      setSummary(data);
+      setViewState("success");
+    } catch (err) {
+      setErrorMessage(err instanceof Error ? err.message : "Error desconocido");
+      setViewState("error");
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchSummary();
+  }, [fetchSummary]);
+
+  const handleClosePosition = async (position: PositionAnalysis) => {
+    const exitPriceInput = prompt(
+      `Cerrar ${position.ticker} — Ingresa el precio de salida (USD):`
+    );
+    if (!exitPriceInput) return;
+
+    const exitPrice = parseFloat(exitPriceInput);
+    if (isNaN(exitPrice) || exitPrice <= 0) {
+      alert("Precio inválido.");
+      return;
+    }
+
+    try {
+      await closePosition(position.id, exitPrice, new Date().toISOString());
+      await fetchSummary();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Error al cerrar la posición");
+    }
+  };
+
+  if (viewState === "loading") {
+    return <Skeleton />;
+  }
+
+  if (viewState === "error") {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-6">
+        <div className="text-center space-y-4">
+          <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-negative/15">
+            <AlertIcon />
+          </div>
+          <p className="text-negative font-mono text-sm">{errorMessage}</p>
+          <button
+            onClick={fetchSummary}
+            className="rounded-lg bg-surface px-5 py-2 text-sm font-medium text-foreground border border-border hover:bg-border/50 transition-colors"
+          >
+            Reintentar
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  const s = summary!;
+  const utilityColor = s.global_utility_percentage >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]";
+
+  const formatMoney = (v: number) =>
+    v.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
+
+  const formatPercent = (v: number) =>
+    `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
+
+  const formatDate = (iso: string) =>
+    new Date(iso).toLocaleDateString("es-MX", { year: "numeric", month: "short", day: "numeric" });
+
+  return (
+    <div className="min-h-screen bg-background px-4 py-6 md:px-8">
+      {/* Header */}
+      <header className="mb-8">
+        <h1 className="text-2xl font-bold tracking-tight text-foreground font-mono">
+          Terminal Financiero
+        </h1>
+        <p className="mt-1 text-sm text-foreground/50 font-mono">
+          Dashboard de Portafolio &middot; {s.positions.length} posiciones activas
+        </p>
+      </header>
+
+      {/* Summary Cards */}
+      <section className="mb-8 grid gap-4 sm:grid-cols-3">
+        <Card label="Capital Invertido" value={formatMoney(s.total_invested_capital)} />
+        <Card label="Valor Actual" value={formatMoney(s.total_current_value)} />
+        <Card
+          label="Utilidad Global"
+          value={formatPercent(s.global_utility_percentage)}
+          valueClassName={utilityColor}
+        />
+      </section>
+
+      {/* Positions Table */}
+      <section>
+        <h2 className="mb-4 text-lg font-semibold text-foreground/80 font-mono">
+          Posiciones Activas
+        </h2>
+
+        {s.positions.length === 0 ? (
+          <div className="rounded-xl border border-border bg-surface px-6 py-12 text-center">
+            <p className="text-foreground/40 font-mono text-sm">Sin posiciones activas</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-border bg-surface">
+            <table className="w-full text-left text-sm font-mono">
+              <thead>
+                <tr className="border-b border-border text-foreground/50 text-xs uppercase tracking-wider">
+                  <th className="px-4 py-3">Ticker</th>
+                  <th className="px-4 py-3 text-right">Cantidad</th>
+                  <th className="px-4 py-3 text-right">P. Compra</th>
+                  <th className="px-4 py-3 text-right">P. Actual</th>
+                  <th className="px-4 py-3 text-right">Días</th>
+                  <th className="px-4 py-3 text-right">Salida Obj.</th>
+                  <th className="px-4 py-3 text-right">Utilidad</th>
+                  <th className="px-4 py-3 text-center">Acción</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border">
+                {s.positions.map((p) => {
+                  const utilityClass =
+                    p.current_utility_percentage >= 0
+                      ? "text-[var(--positive)]"
+                      : "text-[var(--negative)]";
+
+                  return (
+                    <tr
+                      key={p.id}
+                      className="hover:bg-foreground/[0.02] transition-colors"
+                    >
+                      <td className="px-4 py-3 font-semibold text-foreground">
+                        {p.ticker}
+                      </td>
+                      <td className="px-4 py-3 text-right text-foreground/70">
+                        {p.quantity}
+                      </td>
+                      <td className="px-4 py-3 text-right text-foreground/70">
+                        ${p.buy_price.toFixed(2)}
+                      </td>
+                      <td className="px-4 py-3 text-right text-foreground">
+                        ${p.current_price.toFixed(2)}
+                      </td>
+                      <td className="px-4 py-3 text-right text-foreground/50">
+                        {p.days_held}
+                      </td>
+                      <td className="px-4 py-3 text-right text-accent">
+                        ${p.target_exit_price.toFixed(2)}
+                      </td>
+                      <td className={`px-4 py-3 text-right font-medium ${utilityClass}`}>
+                        {formatPercent(p.current_utility_percentage)}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <button
+                          onClick={() => handleClosePosition(p)}
+                          className="rounded-md border border-negative/30 px-3 py-1 text-xs text-negative/80 hover:bg-negative/10 transition-colors"
+                        >
+                          Cerrar
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+/* ── Subcomponents ─────────────────────────────────────────────── */
+
+function Card({
+  label,
+  value,
+  valueClassName,
+}: {
+  label: string;
+  value: string;
+  valueClassName?: string;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-surface px-5 py-4">
+      <p className="mb-1 text-xs font-medium uppercase tracking-wider text-foreground/40">
+        {label}
+      </p>
+      <p className={`text-xl font-bold font-mono ${valueClassName ?? "text-foreground"}`}>
+        {value}
+      </p>
+    </div>
+  );
+}
+
+function Skeleton() {
+  return (
+    <div className="min-h-screen bg-background px-4 py-6 md:px-8">
+      <header className="mb-8 animate-pulse space-y-2">
+        <div className="h-7 w-48 rounded bg-surface" />
+        <div className="h-4 w-64 rounded bg-surface" />
+      </header>
+
+      <section className="mb-8 grid gap-4 sm:grid-cols-3">
+        {[1, 2, 3].map((i) => (
+          <div key={i} className="animate-pulse rounded-xl border border-border bg-surface px-5 py-4 space-y-2">
+            <div className="h-3 w-24 rounded bg-background" />
+            <div className="h-6 w-32 rounded bg-background" />
+          </div>
+        ))}
+      </section>
+
+      <section>
+        <div className="mb-4 h-5 w-40 animate-pulse rounded bg-surface" />
+        <div className="rounded-xl border border-border bg-surface px-6 py-12">
+          <div className="space-y-3">
+            {[1, 2, 3, 4].map((i) => (
+              <div key={i} className="h-6 animate-pulse rounded bg-background" />
+            ))}
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function AlertIcon() {
+  return (
+    <svg
+      className="h-6 w-6 text-negative"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      viewBox="0 0 24 24"
+    >
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"
+      />
+    </svg>
+  );
+}
