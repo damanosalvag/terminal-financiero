@@ -25,6 +25,7 @@ from app.schemas.portfolio import (
 from app.services.finance_math import (
     calculate_current_utility_percentage,
     calculate_days_held,
+    calculate_rsi,
     calculate_target_exit_price,
 )
 
@@ -91,6 +92,8 @@ def portfolio_summary(
             dividends_per_share = market_client.get_dividends_since(
                 position.ticker, position.buy_date
             )
+            historical_close = market_client.get_historical_prices(position.ticker, period="1y")
+            current_rsi = calculate_rsi(historical_close)
         except ValueError:
             # Un ticker problemático no debe detener el análisis del resto del portafolio
             continue
@@ -141,6 +144,7 @@ def portfolio_summary(
                 days_held=days_held,
                 target_exit_price=target_exit,
                 current_utility_percentage=utility_pct,
+                current_rsi=current_rsi,
             )
         )
 
@@ -245,6 +249,8 @@ def analyze_position(
         dividends_per_share = market_client.get_dividends_since(
             position.ticker, position.buy_date
         )
+        historical_close = market_client.get_historical_prices(position.ticker, period="1y")
+        current_rsi = calculate_rsi(historical_close)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -289,6 +295,7 @@ def analyze_position(
         days_held=days_held,
         target_exit_price=target_exit,
         current_utility_percentage=utility_pct,
+        current_rsi=current_rsi,
     )
 
 

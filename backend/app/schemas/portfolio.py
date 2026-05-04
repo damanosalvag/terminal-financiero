@@ -70,6 +70,7 @@ class PositionAnalysisResponse(PositionResponse):
     days_held: int
     target_exit_price: float
     current_utility_percentage: float
+    current_rsi: float | None = None
 
 
 class PortfolioSummaryResponse(BaseModel):

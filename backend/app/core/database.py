@@ -7,9 +7,10 @@ from app.core.config import settings
 
 engine = create_engine(
     settings.DATABASE_URL,
-    pool_size=10,
-    max_overflow=20,
-    pool_pre_ping=True,  # Verifica que la conexión siga viva antes de usarla (útil con Supabase)
+    pool_size=5,
+    max_overflow=10,
+    pool_pre_ping=True,
+    connect_args={"connect_timeout": 10},
 )
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)

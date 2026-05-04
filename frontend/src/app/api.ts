@@ -21,6 +21,7 @@ export interface PositionAnalysis extends PortfolioPosition {
   days_held: number;
   target_exit_price: number;
   current_utility_percentage: number;
+  current_rsi: number | null;
 }
 
 export interface PortfolioSummary {
@@ -102,4 +103,46 @@ export async function getPortfolioHistory(): Promise<PositionHistoryResponse> {
     throw new Error(`Error ${res.status} al obtener historial. ${detail}`);
   }
   return res.json();
+}
+
+export interface WatchlistTicker {
+  id: string;
+  ticker: string;
+  added_date: string;
+  current_price: number | null;
+  current_rsi: number | null;
+  target_price: number | null;
+  margin_of_safety: number | null;
+}
+
+export async function getWatchlist(): Promise<WatchlistTicker[]> {
+  const res = await fetch(`${API_BASE}/watchlist/`);
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Error ${res.status} al obtener watchlist. ${detail}`);
+  }
+  return res.json();
+}
+
+export async function addWatchlistTicker(ticker: string): Promise<WatchlistTicker> {
+  const res = await fetch(`${API_BASE}/watchlist/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ticker }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Error ${res.status} al agregar ticker. ${detail}`);
+  }
+  return res.json();
+}
+
+export async function removeWatchlistTicker(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/watchlist/${id}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Error ${res.status} al eliminar ticker. ${detail}`);
+  }
 }

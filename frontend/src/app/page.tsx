@@ -8,12 +8,16 @@ import {
   type PositionAnalysis,
   type PositionHistoryItem,
   type PositionHistoryResponse,
+  type WatchlistTicker,
+  addWatchlistTicker,
   getPortfolioHistory,
   getPortfolioSummary,
+  getWatchlist,
+  removeWatchlistTicker,
 } from "./api";
 
 type ViewState = "loading" | "error" | "success" | "idle";
-type Tab = "active" | "history";
+type Tab = "active" | "history" | "radar";
 
 export default function Dashboard() {
   const [viewState, setViewState] = useState<ViewState>("loading");
@@ -26,6 +30,12 @@ export default function Dashboard() {
   const [historyView, setHistoryView] = useState<ViewState>("idle");
   const [historyError, setHistoryError] = useState("");
   const [history, setHistory] = useState<PositionHistoryResponse | null>(null);
+
+  const [watchlistView, setWatchlistView] = useState<ViewState>("idle");
+  const [watchlistError, setWatchlistError] = useState("");
+  const [watchlist, setWatchlist] = useState<WatchlistTicker[] | null>(null);
+  const [newTicker, setNewTicker] = useState("");
+  const [adding, setAdding] = useState(false);
 
   const fetchSummary = useCallback(async () => {
     setViewState("loading");
@@ -52,10 +62,50 @@ export default function Dashboard() {
     }
   }, []);
 
+  const fetchWatchlist = useCallback(async () => {
+    setWatchlistView("loading");
+    setWatchlistError("");
+    try {
+      const data = await getWatchlist();
+      setWatchlist(data);
+      setWatchlistView("success");
+    } catch (err) {
+      setWatchlistError(err instanceof Error ? err.message : "Error al cargar radar");
+      setWatchlistView("error");
+    }
+  }, []);
+
+  const handleAddTicker = async () => {
+    const ticker = newTicker.trim().toUpperCase();
+    if (!ticker) return;
+    setAdding(true);
+    try {
+      await addWatchlistTicker(ticker);
+      setNewTicker("");
+      await fetchWatchlist();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Error al agregar ticker");
+    } finally {
+      setAdding(false);
+    }
+  };
+
+  const handleRemoveTicker = async (id: string) => {
+    try {
+      await removeWatchlistTicker(id);
+      await fetchWatchlist();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Error al eliminar ticker");
+    }
+  };
+
   const handleTabChange = (newTab: Tab) => {
     setTab(newTab);
     if (newTab === "history" && history === null && historyView === "idle") {
       fetchHistory();
+    }
+    if (newTab === "radar" && watchlist === null && watchlistView === "idle") {
+      fetchWatchlist();
     }
   };
 
@@ -94,8 +144,11 @@ export default function Dashboard() {
   const formatPercent = (v: number) =>
     `${v >= 0 ? "+" : ""}${v.toFixed(2)}%`;
 
-  const formatDate = (iso: string) =>
-    new Date(iso).toLocaleDateString("es-MX", { year: "numeric", month: "short", day: "numeric" });
+  const formatDate = (iso: string) => {
+    const d = new Date(iso);
+    const months = ["ene", "feb", "mar", "abr", "may", "jun", "jul", "ago", "sep", "oct", "nov", "dic"];
+    return `${d.getDate()} ${months[d.getMonth()]} ${d.getFullYear()}`;
+  };
 
   const utilityColor = s.global_utility_percentage >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]";
 
@@ -133,6 +186,12 @@ export default function Dashboard() {
         >
           Historial
         </TabButton>
+        <TabButton
+          active={tab === "radar"}
+          onClick={() => handleTabChange("radar")}
+        >
+          Radar (Watchlist)
+        </TabButton>
       </nav>
 
       {/* Active Positions View */}
@@ -169,6 +228,7 @@ export default function Dashboard() {
                       <th className="px-4 py-3 text-right">Días</th>
                       <th className="px-4 py-3 text-right">Salida Obj.</th>
                       <th className="px-4 py-3 text-right">Utilidad</th>
+                      <th className="px-4 py-3 text-center">RSI (14d)</th>
                       <th className="px-4 py-3 text-center">Acción</th>
                     </tr>
                   </thead>
@@ -204,6 +264,9 @@ export default function Dashboard() {
                           </td>
                           <td className={`px-4 py-3 text-right font-medium ${utilityClass}`}>
                             {formatPercent(p.current_utility_percentage)}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <RSIBadge rsi={p.current_rsi} />
                           </td>
                           <td className="px-4 py-3 text-center">
                             <button
@@ -329,6 +392,118 @@ export default function Dashboard() {
         </section>
       )}
 
+      {/* Watchlist / Radar View */}
+      {tab === "radar" && (
+        <section>
+          <h2 className="mb-4 text-lg font-semibold text-foreground/80 font-mono">
+            Radar (Watchlist)
+          </h2>
+
+          {/* Add Ticker */}
+          <div className="mb-4 flex gap-2">
+            <input
+              type="text"
+              value={newTicker}
+              onChange={(e) => setNewTicker(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && handleAddTicker()}
+              placeholder="AAPL"
+              maxLength={10}
+              className="w-40 rounded-lg border border-border bg-surface px-3 py-2 text-sm font-mono text-foreground placeholder:text-foreground/20 focus:outline-none focus:ring-2 focus:ring-accent/50 transition-colors"
+            />
+            <button
+              onClick={handleAddTicker}
+              disabled={adding || !newTicker.trim()}
+              className="rounded-lg bg-accent px-4 py-2 text-sm font-bold text-accent-foreground hover:bg-accent/90 transition-colors disabled:opacity-50 font-mono"
+            >
+              {adding ? "Agregando..." : "Agregar"}
+            </button>
+          </div>
+
+          {(watchlistView === "loading" || watchlistView === "idle") && (
+            <div className="rounded-xl border border-border bg-surface px-6 py-12">
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-6 animate-pulse rounded bg-background" />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {watchlistView === "error" && (
+            <div className="rounded-xl border border-border bg-surface px-6 py-8 text-center space-y-3">
+              <p className="text-negative font-mono text-sm">{watchlistError}</p>
+              <button
+                onClick={fetchWatchlist}
+                className="rounded-lg bg-surface px-4 py-1.5 text-xs font-medium text-foreground border border-border hover:bg-border/50 transition-colors"
+              >
+                Reintentar
+              </button>
+            </div>
+          )}
+
+          {watchlistView === "success" && watchlist && (
+            <>
+              {watchlist.length === 0 ? (
+                <div className="rounded-xl border border-border bg-surface px-6 py-12 text-center">
+                  <p className="text-foreground/40 font-mono text-sm">Sin tickers en el radar</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-border bg-surface">
+                  <table className="w-full text-left text-sm font-mono">
+                    <thead>
+                      <tr className="border-b border-border text-foreground/50 text-xs uppercase tracking-wider">
+                        <th className="px-4 py-3">Ticker</th>
+                        <th className="px-4 py-3 text-right">Precio Actual</th>
+                        <th className="px-4 py-3 text-right">P. Objetivo</th>
+                        <th className="px-4 py-3 text-center">Margen Seg.</th>
+                        <th className="px-4 py-3 text-center">RSI (14d)</th>
+                        <th className="px-4 py-3 text-center">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {watchlist.map((w: WatchlistTicker) => (
+                        <tr
+                          key={w.id}
+                          className="hover:bg-foreground/[0.02] transition-colors"
+                        >
+                          <td className="px-4 py-3 font-semibold text-foreground">
+                            {w.ticker}
+                          </td>
+                          <td className="px-4 py-3 text-right text-foreground">
+                            {w.current_price !== null
+                              ? `$${w.current_price.toFixed(2)}`
+                              : <span className="text-foreground/20">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-right text-foreground/70">
+                            {w.target_price !== null
+                              ? `$${w.target_price.toFixed(2)}`
+                              : <span className="text-foreground/20">—</span>}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <MarginBadge margin={w.margin_of_safety} />
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <RSIBadge rsi={w.current_rsi} />
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => handleRemoveTicker(w.id)}
+                              className="rounded-md border border-negative/30 px-3 py-1 text-xs text-negative/80 hover:bg-negative/10 transition-colors"
+                            >
+                              Eliminar
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
       <NewPositionModal
         open={modalOpen}
         onClose={() => setModalOpen(false)}
@@ -371,6 +546,68 @@ function TabButton({
     >
       {children}
     </button>
+  );
+}
+
+function RSIBadge({ rsi }: { rsi: number | null }) {
+  if (rsi === null) {
+    return <span className="text-xs text-foreground/20 font-mono">—</span>;
+  }
+
+  const colorClass =
+    rsi < 30
+      ? "text-[var(--positive)] bg-[var(--positive)]/10 border-[var(--positive)]/30"
+      : rsi > 70
+        ? "text-[var(--negative)] bg-[var(--negative)]/10 border-[var(--negative)]/30"
+        : "text-foreground/50 bg-foreground/5 border-border";
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-bold font-mono ${colorClass}`}
+    >
+      <span
+        className={`inline-block h-1.5 w-1.5 rounded-full ${
+          rsi < 30
+            ? "bg-[var(--positive)]"
+            : rsi > 70
+              ? "bg-[var(--negative)]"
+              : "bg-foreground/30"
+        }`}
+      />
+      {rsi.toFixed(1)}
+    </span>
+  );
+}
+
+function MarginBadge({ margin }: { margin: number | null }) {
+  if (margin === null) {
+    return <span className="text-xs text-foreground/20 font-mono">—</span>;
+  }
+
+  const colorClass =
+    margin > 15
+      ? "text-[var(--positive)] bg-[var(--positive)]/10 border-[var(--positive)]/30"
+      : margin < 0
+        ? "text-[var(--negative)] bg-[var(--negative)]/10 border-[var(--negative)]/30"
+        : "text-foreground/50 bg-foreground/5 border-border";
+
+  const sign = margin >= 0 ? "+" : "";
+
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-bold font-mono ${colorClass}`}
+    >
+      <span
+        className={`inline-block h-1.5 w-1.5 rounded-full ${
+          margin > 15
+            ? "bg-[var(--positive)]"
+            : margin < 0
+              ? "bg-[var(--negative)]"
+              : "bg-foreground/30"
+        }`}
+      />
+      {sign}{margin.toFixed(1)}%
+    </span>
   );
 }
 

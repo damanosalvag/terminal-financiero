@@ -53,6 +53,63 @@ class YahooFinanceClient:
                 f"Underlying error: {exc}"
             ) from exc
 
+    def get_historical_prices(self, ticker: str, period: str = "1y") -> list[float]:
+        """
+        Obtiene los precios de cierre históricos para calcular indicadores técnicos.
+
+        Args:
+            ticker: Símbolo bursátil.
+            period: Período a consultar (ej. '1mo', '3mo', '1y'). Default '1y' (~252 días hábiles)
+                    para permitir que indicadores como RSI converjan correctamente.
+
+        Returns:
+            Lista de precios de cierre en orden cronológico.
+
+        Raises:
+            ValueError: Si el ticker no existe o la API falla.
+        """
+        try:
+            df = yf.Ticker(ticker).history(period=period)
+
+            if df.empty or "Close" not in df.columns:
+                raise ValueError(f"Ticker not found or data unavailable: '{ticker}'")
+
+            return [float(v) for v in df["Close"].tolist()]
+
+        except ValueError:
+            raise
+        except Exception as exc:
+            logger.exception("Network or API failure fetching history for ticker=%s", ticker)
+            raise ValueError(
+                f"Ticker not found or data unavailable: '{ticker}'. "
+                f"Underlying error: {exc}"
+            ) from exc
+
+    def get_target_price(self, ticker: str) -> float | None:
+        """
+        Obtiene el precio objetivo promedio de analistas (targetMeanPrice) desde Yahoo Finance.
+
+        Args:
+            ticker: Símbolo bursátil.
+
+        Returns:
+            Precio objetivo promedio de los analistas, o None si no está disponible.
+
+        Raises:
+            ValueError: Si el ticker no existe o la API falla.
+        """
+        try:
+            info = yf.Ticker(ticker).info
+            target = info.get("targetMeanPrice")
+            return float(target) if target is not None else None
+
+        except Exception as exc:
+            logger.exception("Network or API failure fetching target price for ticker=%s", ticker)
+            raise ValueError(
+                f"Ticker not found or data unavailable: '{ticker}'. "
+                f"Underlying error: {exc}"
+            ) from exc
+
     def get_dividends_since(self, ticker: str, start_date: datetime) -> float:
         """
         Obtiene la suma de dividendos pagados por el ticker desde start_date hasta hoy.

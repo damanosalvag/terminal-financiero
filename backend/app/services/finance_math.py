@@ -6,9 +6,12 @@ Principios:
   - Interés compuesto diario (daily compounding).
   - Ajuste por erosión inflacionaria sobre la base de costo.
   - Deducción de dividendos acumulados para reflejar retorno real.
+  - Indicadores técnicos (RSI) calculados con pandas rolling.
 """
 
 from datetime import datetime
+
+import pandas as pd
 
 
 def calculate_days_held(buy_date: datetime, current_date: datetime) -> int:
@@ -128,3 +131,53 @@ def calculate_current_utility_percentage(
 
     utility_pct = (net_return / total_cost) * 100.0
     return round(utility_pct, 2)
+
+
+def calculate_rsi(closing_prices: list[float], period: int = 14) -> float | None:
+    """
+    Calcula el Relative Strength Index (RSI) usando el método de Wilder.
+
+    El RSI mide la velocidad y magnitud de los cambios de precio. Un valor > 70
+    sugiere sobrecompra, < 30 sugiere sobreventa.
+
+    Se requiere al menos (period + 1) precios para calcular el indicador.
+    Si no hay suficientes datos, retorna None.
+
+    Args:
+        closing_prices: Lista de precios de cierre en orden cronológico.
+        period: Período del RSI (default 14).
+
+    Returns:
+        Valor del RSI entre 0 y 100, o None si no hay suficientes datos.
+    """
+    if len(closing_prices) < period + 1:
+        return None
+
+    df = pd.DataFrame({"close": closing_prices})
+    df["delta"] = df["close"].diff()
+    df["gain"] = df["delta"].clip(lower=0)
+    df["loss"] = (-df["delta"]).clip(lower=0)
+
+    # Promedio inicial simple de las primeras 'period' observaciones (excluyendo la primera diff que es NaN)
+    avg_gain = float(df["gain"].iloc[1 : period + 1].mean())
+    avg_loss = float(df["loss"].iloc[1 : period + 1].mean())
+
+    rsi_values: list[float] = []
+
+    # Calcular RSI para cada punto posterior usando suavizado de Wilder
+    for i in range(period + 1, len(df)):
+        current_gain = float(df["gain"].iloc[i])
+        current_loss = float(df["loss"].iloc[i])
+        avg_gain = (avg_gain * (period - 1) + current_gain) / period
+        avg_loss = (avg_loss * (period - 1) + current_loss) / period
+
+        if avg_loss == 0:
+            rsi = 100.0
+        else:
+            rs = avg_gain / avg_loss
+            rsi = 100.0 - (100.0 / (1.0 + rs))
+
+        rsi_values.append(rsi)
+
+    # Retornar el último valor de RSI calculado
+    return round(rsi_values[-1], 2) if rsi_values else None
