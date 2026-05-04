@@ -94,6 +94,12 @@ export interface PositionHistoryResponse {
   total_realized_profit: number;
   total_closed_positions: number;
   positions: PositionHistoryItem[];
+  best_trade_ticker: string | null;
+  best_trade_profit: number | null;
+  worst_trade_ticker: string | null;
+  worst_trade_loss: number | null;
+  win_rate_percentage: number;
+  total_commissions_paid: number;
 }
 
 export async function getPortfolioHistory(): Promise<PositionHistoryResponse> {

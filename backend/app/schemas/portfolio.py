@@ -91,8 +91,14 @@ class PositionHistoryItem(PositionResponse):
 
 
 class PositionHistoryResponse(BaseModel):
-    """Resumen de posiciones cerradas con ganancia/pérdida total realizada."""
+    """Resumen de posiciones cerradas con ganancia/pérdida total realizada y métricas avanzadas."""
 
     total_realized_profit: float
     total_closed_positions: int
     positions: list[PositionHistoryItem]
+    best_trade_ticker: str | None = None
+    best_trade_profit: float | None = None
+    worst_trade_ticker: str | None = None
+    worst_trade_loss: float | None = None
+    win_rate_percentage: float = 0.0
+    total_commissions_paid: float = 0.0

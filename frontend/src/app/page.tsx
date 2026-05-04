@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import ClosePositionModal from "@/components/ClosePositionModal";
 import NewPositionModal from "@/components/NewPositionModal";
 import {
@@ -245,7 +246,9 @@ export default function Dashboard() {
                           className="hover:bg-foreground/[0.02] transition-colors"
                         >
                           <td className="px-4 py-3 font-semibold text-foreground">
-                            {p.ticker}
+                            <Link href={`/asset/${p.ticker}`} className="hover:text-accent transition-colors">
+                              {p.ticker}
+                            </Link>
                           </td>
                           <td className="px-4 py-3 text-right text-foreground/70">
                             {p.quantity}
@@ -318,15 +321,40 @@ export default function Dashboard() {
 
           {historyView === "success" && history && (
             <>
-              <div className="mb-4 rounded-xl border border-border bg-surface px-5 py-3 flex items-center justify-between">
-                <span className="text-sm font-mono text-foreground/50">
-                  {history.total_closed_positions} operaciones cerradas
-                </span>
-                <span
-                  className={`text-lg font-bold font-mono ${history.total_realized_profit >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]"}`}
-                >
-                  {formatMoney(history.total_realized_profit)}
-                </span>
+              {/* Advanced Metrics Grid */}
+              <div className="mb-4 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+                <Card
+                  label="Joya de la Corona"
+                  value={
+                    history.best_trade_ticker
+                      ? `${history.best_trade_ticker}  ${formatMoney(history.best_trade_profit ?? 0)}`
+                      : "—"
+                  }
+                  valueClassName="text-[var(--positive)]"
+                />
+                <Card
+                  label="Agujero Negro"
+                  value={
+                    history.worst_trade_ticker
+                      ? `${history.worst_trade_ticker}  ${formatMoney(history.worst_trade_loss ?? 0)}`
+                      : "—"
+                  }
+                  valueClassName="text-[var(--negative)]"
+                />
+                <Card
+                  label="Win Rate"
+                  value={`${history.win_rate_percentage.toFixed(1)}%`}
+                  valueClassName={
+                    history.win_rate_percentage >= 50
+                      ? "text-[var(--positive)]"
+                      : "text-[var(--negative)]"
+                  }
+                />
+                <Card
+                  label="Total Comisiones"
+                  value={formatMoney(history.total_commissions_paid)}
+                  valueClassName="text-foreground/50"
+                />
               </div>
 
               {history.positions.length === 0 ? (
@@ -467,7 +495,9 @@ export default function Dashboard() {
                           className="hover:bg-foreground/[0.02] transition-colors"
                         >
                           <td className="px-4 py-3 font-semibold text-foreground">
-                            {w.ticker}
+                            <Link href={`/asset/${w.ticker}`} className="hover:text-accent transition-colors">
+                              {w.ticker}
+                            </Link>
                           </td>
                           <td className="px-4 py-3 text-right text-foreground">
                             {w.current_price !== null

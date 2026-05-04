@@ -167,7 +167,8 @@ def position_history(
     db: Session = Depends(get_db),
 ) -> PositionHistoryResponse:
     """
-    Devuelve el historial de posiciones cerradas con utilidad realizada.
+    Devuelve el historial de posiciones cerradas con utilidad realizada
+    y métricas agregadas avanzadas (mejor/peor trade, win rate, comisiones totales).
     No consume APIs externas: usa exit_price y exit_date guardados en la base de datos.
     """
     closed = (
@@ -177,8 +178,20 @@ def position_history(
         .all()
     )
 
+    # Comisiones de TODAS las posiciones (activas + cerradas)
+    total_commissions = db.query(PortfolioPosition).with_entities(
+        PortfolioPosition.commission
+    ).all()
+    total_commissions_paid = round(sum(float(c[0]) for c in total_commissions), 2)
+
     history_items: list[PositionHistoryItem] = []
     total_realized = 0.0
+
+    best_ticker: str | None = None
+    best_profit: float | None = None
+    worst_ticker: str | None = None
+    worst_loss: float | None = None
+    winning_trades = 0
 
     for position in closed:
         # Una posición cerrada siempre debe tener exit_price y exit_date.
@@ -197,6 +210,17 @@ def position_history(
         actual_days = abs((exit_dt - buy_dt).days)
 
         total_realized += realized_profit
+
+        if realized_profit > 0:
+            winning_trades += 1
+
+        # Joya de la Corona / Agujero Negro
+        if best_profit is None or realized_profit > best_profit:
+            best_profit = realized_profit
+            best_ticker = position.ticker
+        if worst_loss is None or realized_profit < worst_loss:
+            worst_loss = realized_profit
+            worst_ticker = position.ticker
 
         history_items.append(
             PositionHistoryItem(
@@ -218,10 +242,19 @@ def position_history(
             )
         )
 
+    total_trades = len(history_items)
+    win_rate = (winning_trades / total_trades * 100.0) if total_trades > 0 else 0.0
+
     return PositionHistoryResponse(
         total_realized_profit=round(total_realized, 2),
-        total_closed_positions=len(history_items),
+        total_closed_positions=total_trades,
         positions=history_items,
+        best_trade_ticker=best_ticker,
+        best_trade_profit=round(best_profit, 2) if best_profit is not None else None,
+        worst_trade_ticker=worst_ticker,
+        worst_trade_loss=round(worst_loss, 2) if worst_loss is not None else None,
+        win_rate_percentage=round(win_rate, 2),
+        total_commissions_paid=total_commissions_paid,
     )
 
 

@@ -6,6 +6,7 @@ Las excepciones nativas de yfinance nunca burbujean hacia la capa de aplicación
 
 import logging
 from datetime import datetime
+from typing import Any
 
 import pandas as pd
 import yfinance as yf
@@ -80,6 +81,48 @@ class YahooFinanceClient:
             raise
         except Exception as exc:
             logger.exception("Network or API failure fetching history for ticker=%s", ticker)
+            raise ValueError(
+                f"Ticker not found or data unavailable: '{ticker}'. "
+                f"Underlying error: {exc}"
+            ) from exc
+
+    def get_ohlcv_data(self, ticker: str, period: str = "6mo") -> list[dict[str, Any]]:
+        """
+        Obtiene datos históricos OHLCV (Open, High, Low, Close, Volume) para gráficos de velas.
+
+        Args:
+            ticker: Símbolo bursátil.
+            period: Período a consultar (ej. '1mo', '3mo', '6mo', '1y'). Default '6mo'.
+
+        Returns:
+            Lista de diccionarios con claves: date (str YYYY-MM-DD), open, high, low, close, volume.
+
+        Raises:
+            ValueError: Si el ticker no existe o la API falla.
+        """
+        try:
+            df = yf.Ticker(ticker).history(period=period)
+
+            if df.empty:
+                raise ValueError(f"Ticker not found or data unavailable: '{ticker}'")
+
+            candles: list[dict[str, Any]] = []
+            for dt, row in df.iterrows():
+                candles.append({
+                    "date": dt.strftime("%Y-%m-%d"),
+                    "open": round(float(row["Open"]), 2),
+                    "high": round(float(row["High"]), 2),
+                    "low": round(float(row["Low"]), 2),
+                    "close": round(float(row["Close"]), 2),
+                    "volume": int(row["Volume"]),
+                })
+
+            return candles
+
+        except ValueError:
+            raise
+        except Exception as exc:
+            logger.exception("Network or API failure fetching OHLCV for ticker=%s", ticker)
             raise ValueError(
                 f"Ticker not found or data unavailable: '{ticker}'. "
                 f"Underlying error: {exc}"
