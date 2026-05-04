@@ -1,19 +1,31 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import ClosePositionModal from "@/components/ClosePositionModal";
+import NewPositionModal from "@/components/NewPositionModal";
 import {
   type PortfolioSummary,
   type PositionAnalysis,
-  closePosition,
+  type PositionHistoryItem,
+  type PositionHistoryResponse,
+  getPortfolioHistory,
   getPortfolioSummary,
 } from "./api";
 
-type ViewState = "loading" | "error" | "success";
+type ViewState = "loading" | "error" | "success" | "idle";
+type Tab = "active" | "history";
 
 export default function Dashboard() {
   const [viewState, setViewState] = useState<ViewState>("loading");
   const [errorMessage, setErrorMessage] = useState("");
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
+  const [modalOpen, setModalOpen] = useState(false);
+  const [closeTarget, setCloseTarget] = useState<PositionAnalysis | null>(null);
+
+  const [tab, setTab] = useState<Tab>("active");
+  const [historyView, setHistoryView] = useState<ViewState>("idle");
+  const [historyError, setHistoryError] = useState("");
+  const [history, setHistory] = useState<PositionHistoryResponse | null>(null);
 
   const fetchSummary = useCallback(async () => {
     setViewState("loading");
@@ -27,29 +39,29 @@ export default function Dashboard() {
     }
   }, []);
 
+  const fetchHistory = useCallback(async () => {
+    setHistoryView("loading");
+    setHistoryError("");
+    try {
+      const data = await getPortfolioHistory();
+      setHistory(data);
+      setHistoryView("success");
+    } catch (err) {
+      setHistoryError(err instanceof Error ? err.message : "Error al cargar historial");
+      setHistoryView("error");
+    }
+  }, []);
+
+  const handleTabChange = (newTab: Tab) => {
+    setTab(newTab);
+    if (newTab === "history" && history === null && historyView === "idle") {
+      fetchHistory();
+    }
+  };
+
   useEffect(() => {
     fetchSummary();
   }, [fetchSummary]);
-
-  const handleClosePosition = async (position: PositionAnalysis) => {
-    const exitPriceInput = prompt(
-      `Cerrar ${position.ticker} — Ingresa el precio de salida (USD):`
-    );
-    if (!exitPriceInput) return;
-
-    const exitPrice = parseFloat(exitPriceInput);
-    if (isNaN(exitPrice) || exitPrice <= 0) {
-      alert("Precio inválido.");
-      return;
-    }
-
-    try {
-      await closePosition(position.id, exitPrice, new Date().toISOString());
-      await fetchSummary();
-    } catch (err) {
-      alert(err instanceof Error ? err.message : "Error al cerrar la posición");
-    }
-  };
 
   if (viewState === "loading") {
     return <Skeleton />;
@@ -75,7 +87,6 @@ export default function Dashboard() {
   }
 
   const s = summary!;
-  const utilityColor = s.global_utility_percentage >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]";
 
   const formatMoney = (v: number) =>
     v.toLocaleString("en-US", { style: "currency", currency: "USD", minimumFractionDigits: 2 });
@@ -86,108 +97,282 @@ export default function Dashboard() {
   const formatDate = (iso: string) =>
     new Date(iso).toLocaleDateString("es-MX", { year: "numeric", month: "short", day: "numeric" });
 
+  const utilityColor = s.global_utility_percentage >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]";
+
   return (
     <div className="min-h-screen bg-background px-4 py-6 md:px-8">
       {/* Header */}
-      <header className="mb-8">
-        <h1 className="text-2xl font-bold tracking-tight text-foreground font-mono">
-          Terminal Financiero
-        </h1>
-        <p className="mt-1 text-sm text-foreground/50 font-mono">
-          Dashboard de Portafolio &middot; {s.positions.length} posiciones activas
-        </p>
+      <header className="mb-8 flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-foreground font-mono">
+            Terminal Financiero
+          </h1>
+          <p className="mt-1 text-sm text-foreground/50 font-mono">
+            Dashboard de Portafolio &middot; {s.positions.length} posiciones activas
+          </p>
+        </div>
+        <button
+          onClick={() => setModalOpen(true)}
+          className="shrink-0 rounded-lg bg-accent px-5 py-2.5 text-sm font-bold text-accent-foreground hover:bg-accent/90 transition-colors font-mono"
+        >
+          + Nueva Posición
+        </button>
       </header>
 
-      {/* Summary Cards */}
-      <section className="mb-8 grid gap-4 sm:grid-cols-3">
-        <Card label="Capital Invertido" value={formatMoney(s.total_invested_capital)} />
-        <Card label="Valor Actual" value={formatMoney(s.total_current_value)} />
-        <Card
-          label="Utilidad Global"
-          value={formatPercent(s.global_utility_percentage)}
-          valueClassName={utilityColor}
-        />
-      </section>
-
-      {/* Positions Table */}
-      <section>
-        <h2 className="mb-4 text-lg font-semibold text-foreground/80 font-mono">
+      {/* Tabs */}
+      <nav className="mb-6 flex gap-1 rounded-xl border border-border bg-surface p-1 w-fit">
+        <TabButton
+          active={tab === "active"}
+          onClick={() => handleTabChange("active")}
+        >
           Posiciones Activas
-        </h2>
+        </TabButton>
+        <TabButton
+          active={tab === "history"}
+          onClick={() => handleTabChange("history")}
+        >
+          Historial
+        </TabButton>
+      </nav>
 
-        {s.positions.length === 0 ? (
-          <div className="rounded-xl border border-border bg-surface px-6 py-12 text-center">
-            <p className="text-foreground/40 font-mono text-sm">Sin posiciones activas</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto rounded-xl border border-border bg-surface">
-            <table className="w-full text-left text-sm font-mono">
-              <thead>
-                <tr className="border-b border-border text-foreground/50 text-xs uppercase tracking-wider">
-                  <th className="px-4 py-3">Ticker</th>
-                  <th className="px-4 py-3 text-right">Cantidad</th>
-                  <th className="px-4 py-3 text-right">P. Compra</th>
-                  <th className="px-4 py-3 text-right">P. Actual</th>
-                  <th className="px-4 py-3 text-right">Días</th>
-                  <th className="px-4 py-3 text-right">Salida Obj.</th>
-                  <th className="px-4 py-3 text-right">Utilidad</th>
-                  <th className="px-4 py-3 text-center">Acción</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border">
-                {s.positions.map((p) => {
-                  const utilityClass =
-                    p.current_utility_percentage >= 0
-                      ? "text-[var(--positive)]"
-                      : "text-[var(--negative)]";
+      {/* Active Positions View */}
+      {tab === "active" && (
+        <>
+          <section className="mb-8 grid gap-4 sm:grid-cols-3">
+            <Card label="Capital Invertido" value={formatMoney(s.total_invested_capital)} />
+            <Card label="Valor Actual" value={formatMoney(s.total_current_value)} />
+            <Card
+              label="Utilidad Global"
+              value={formatPercent(s.global_utility_percentage)}
+              valueClassName={utilityColor}
+            />
+          </section>
 
-                  return (
-                    <tr
-                      key={p.id}
-                      className="hover:bg-foreground/[0.02] transition-colors"
-                    >
-                      <td className="px-4 py-3 font-semibold text-foreground">
-                        {p.ticker}
-                      </td>
-                      <td className="px-4 py-3 text-right text-foreground/70">
-                        {p.quantity}
-                      </td>
-                      <td className="px-4 py-3 text-right text-foreground/70">
-                        ${p.buy_price.toFixed(2)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-foreground">
-                        ${p.current_price.toFixed(2)}
-                      </td>
-                      <td className="px-4 py-3 text-right text-foreground/50">
-                        {p.days_held}
-                      </td>
-                      <td className="px-4 py-3 text-right text-accent">
-                        ${p.target_exit_price.toFixed(2)}
-                      </td>
-                      <td className={`px-4 py-3 text-right font-medium ${utilityClass}`}>
-                        {formatPercent(p.current_utility_percentage)}
-                      </td>
-                      <td className="px-4 py-3 text-center">
-                        <button
-                          onClick={() => handleClosePosition(p)}
-                          className="rounded-md border border-negative/30 px-3 py-1 text-xs text-negative/80 hover:bg-negative/10 transition-colors"
-                        >
-                          Cerrar
-                        </button>
-                      </td>
+          <section>
+            <h2 className="mb-4 text-lg font-semibold text-foreground/80 font-mono">
+              Posiciones Activas
+            </h2>
+
+            {s.positions.length === 0 ? (
+              <div className="rounded-xl border border-border bg-surface px-6 py-12 text-center">
+                <p className="text-foreground/40 font-mono text-sm">Sin posiciones activas</p>
+              </div>
+            ) : (
+              <div className="overflow-x-auto rounded-xl border border-border bg-surface">
+                <table className="w-full text-left text-sm font-mono">
+                  <thead>
+                    <tr className="border-b border-border text-foreground/50 text-xs uppercase tracking-wider">
+                      <th className="px-4 py-3">Ticker</th>
+                      <th className="px-4 py-3 text-right">Cantidad</th>
+                      <th className="px-4 py-3 text-right">P. Compra</th>
+                      <th className="px-4 py-3 text-right">P. Actual</th>
+                      <th className="px-4 py-3 text-right">Días</th>
+                      <th className="px-4 py-3 text-right">Salida Obj.</th>
+                      <th className="px-4 py-3 text-right">Utilidad</th>
+                      <th className="px-4 py-3 text-center">Acción</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+                  </thead>
+                  <tbody className="divide-y divide-border">
+                    {s.positions.map((p) => {
+                      const utilityClass =
+                        p.current_utility_percentage >= 0
+                          ? "text-[var(--positive)]"
+                          : "text-[var(--negative)]";
+
+                      return (
+                        <tr
+                          key={p.id}
+                          className="hover:bg-foreground/[0.02] transition-colors"
+                        >
+                          <td className="px-4 py-3 font-semibold text-foreground">
+                            {p.ticker}
+                          </td>
+                          <td className="px-4 py-3 text-right text-foreground/70">
+                            {p.quantity}
+                          </td>
+                          <td className="px-4 py-3 text-right text-foreground/70">
+                            ${p.buy_price.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-foreground">
+                            ${p.current_price.toFixed(2)}
+                          </td>
+                          <td className="px-4 py-3 text-right text-foreground/50">
+                            {p.days_held}
+                          </td>
+                          <td className="px-4 py-3 text-right text-accent">
+                            ${p.target_exit_price.toFixed(2)}
+                          </td>
+                          <td className={`px-4 py-3 text-right font-medium ${utilityClass}`}>
+                            {formatPercent(p.current_utility_percentage)}
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <button
+                              onClick={() => setCloseTarget(p)}
+                              className="rounded-md border border-negative/30 px-3 py-1 text-xs text-negative/80 hover:bg-negative/10 transition-colors"
+                            >
+                              Cerrar
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </section>
+        </>
+      )}
+
+      {/* History View */}
+      {tab === "history" && (
+        <section>
+          <h2 className="mb-4 text-lg font-semibold text-foreground/80 font-mono">
+            Historial de Operaciones
+          </h2>
+
+          {(historyView === "loading" || historyView === "idle") && (
+            <div className="rounded-xl border border-border bg-surface px-6 py-12">
+              <div className="space-y-3">
+                {[1, 2, 3].map((i) => (
+                  <div key={i} className="h-6 animate-pulse rounded bg-background" />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {historyView === "error" && (
+            <div className="rounded-xl border border-border bg-surface px-6 py-8 text-center space-y-3">
+              <p className="text-negative font-mono text-sm">{historyError}</p>
+              <button
+                onClick={fetchHistory}
+                className="rounded-lg bg-surface px-4 py-1.5 text-xs font-medium text-foreground border border-border hover:bg-border/50 transition-colors"
+              >
+                Reintentar
+              </button>
+            </div>
+          )}
+
+          {historyView === "success" && history && (
+            <>
+              <div className="mb-4 rounded-xl border border-border bg-surface px-5 py-3 flex items-center justify-between">
+                <span className="text-sm font-mono text-foreground/50">
+                  {history.total_closed_positions} operaciones cerradas
+                </span>
+                <span
+                  className={`text-lg font-bold font-mono ${history.total_realized_profit >= 0 ? "text-[var(--positive)]" : "text-[var(--negative)]"}`}
+                >
+                  {formatMoney(history.total_realized_profit)}
+                </span>
+              </div>
+
+              {history.positions.length === 0 ? (
+                <div className="rounded-xl border border-border bg-surface px-6 py-12 text-center">
+                  <p className="text-foreground/40 font-mono text-sm">Sin operaciones cerradas</p>
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-border bg-surface">
+                  <table className="w-full text-left text-sm font-mono">
+                    <thead>
+                      <tr className="border-b border-border text-foreground/50 text-xs uppercase tracking-wider">
+                        <th className="px-4 py-3">Ticker</th>
+                        <th className="px-4 py-3 text-right">F. Compra</th>
+                        <th className="px-4 py-3 text-right">F. Salida</th>
+                        <th className="px-4 py-3 text-right">P. Compra</th>
+                        <th className="px-4 py-3 text-right">P. Salida</th>
+                        <th className="px-4 py-3 text-right">Días</th>
+                        <th className="px-4 py-3 text-right">Utilidad Realizada</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-border">
+                      {history.positions.map((h: PositionHistoryItem) => {
+                        const utilityClass =
+                          h.realized_utility_percentage >= 0
+                            ? "text-[var(--positive)]"
+                            : "text-[var(--negative)]";
+
+                        return (
+                          <tr
+                            key={h.id}
+                            className="hover:bg-foreground/[0.02] transition-colors"
+                          >
+                            <td className="px-4 py-3 font-semibold text-foreground">
+                              {h.ticker}
+                            </td>
+                            <td className="px-4 py-3 text-right text-foreground/50">
+                              {formatDate(h.buy_date)}
+                            </td>
+                            <td className="px-4 py-3 text-right text-foreground/50">
+                              {formatDate(h.exit_date)}
+                            </td>
+                            <td className="px-4 py-3 text-right text-foreground/70">
+                              ${h.buy_price.toFixed(2)}
+                            </td>
+                            <td className="px-4 py-3 text-right text-foreground">
+                              ${h.exit_price.toFixed(2)}
+                            </td>
+                            <td className="px-4 py-3 text-right text-foreground/50">
+                              {h.actual_days_held}
+                            </td>
+                            <td className={`px-4 py-3 text-right font-medium ${utilityClass}`}>
+                              {formatPercent(h.realized_utility_percentage)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </>
+          )}
+        </section>
+      )}
+
+      <NewPositionModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onPositionCreated={fetchSummary}
+      />
+
+      <ClosePositionModal
+        open={closeTarget !== null}
+        position={closeTarget}
+        onClose={() => setCloseTarget(null)}
+        onClosed={() => {
+          fetchSummary();
+          // También invalidar historial para que recargue al cambiar de tab
+          setHistory(null);
+        }}
+      />
     </div>
   );
 }
 
 /* ── Subcomponents ─────────────────────────────────────────────── */
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-lg px-4 py-2 text-sm font-mono font-medium transition-colors ${
+        active
+          ? "bg-accent text-accent-foreground"
+          : "text-foreground/50 hover:text-foreground/80"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
 
 function Card({
   label,
@@ -217,6 +402,8 @@ function Skeleton() {
         <div className="h-7 w-48 rounded bg-surface" />
         <div className="h-4 w-64 rounded bg-surface" />
       </header>
+
+      <div className="mb-6 h-10 w-72 animate-pulse rounded-xl bg-surface" />
 
       <section className="mb-8 grid gap-4 sm:grid-cols-3">
         {[1, 2, 3].map((i) => (

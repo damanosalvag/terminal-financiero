@@ -18,6 +18,8 @@ from app.schemas.portfolio import (
     PositionAnalysisResponse,
     PositionClose,
     PositionCreate,
+    PositionHistoryItem,
+    PositionHistoryResponse,
     PositionResponse,
 )
 from app.services.finance_math import (
@@ -153,6 +155,69 @@ def portfolio_summary(
         total_current_value=round(total_current, 2),
         global_utility_percentage=round(global_utility, 2),
         positions=analyzed,
+    )
+
+
+@router.get("/history", response_model=PositionHistoryResponse)
+def position_history(
+    db: Session = Depends(get_db),
+) -> PositionHistoryResponse:
+    """
+    Devuelve el historial de posiciones cerradas con utilidad realizada.
+    No consume APIs externas: usa exit_price y exit_date guardados en la base de datos.
+    """
+    closed = (
+        db.query(PortfolioPosition)
+        .filter(PortfolioPosition.is_active.is_(False))
+        .order_by(PortfolioPosition.buy_date.desc())
+        .all()
+    )
+
+    history_items: list[PositionHistoryItem] = []
+    total_realized = 0.0
+
+    for position in closed:
+        # Una posición cerrada siempre debe tener exit_price y exit_date.
+        # Si por algún motivo no los tiene, se omite del historial.
+        if position.exit_price is None or position.exit_date is None:
+            continue
+
+        invested = position.buy_price * position.quantity + position.commission
+        exit_value = position.exit_price * position.quantity
+        realized_profit = exit_value - invested
+        realized_pct = (realized_profit / invested * 100.0) if invested > 0 else 0.0
+
+        # Días reales entre compra y cierre (sin forzar mínimo, puede ser 0)
+        buy_dt = position.buy_date.replace(tzinfo=None)
+        exit_dt = position.exit_date.replace(tzinfo=None)
+        actual_days = abs((exit_dt - buy_dt).days)
+
+        total_realized += realized_profit
+
+        history_items.append(
+            PositionHistoryItem(
+                id=position.id,
+                ticker=position.ticker,
+                quantity=position.quantity,
+                buy_price=position.buy_price,
+                currency=position.currency,
+                buy_date=position.buy_date,
+                commission=position.commission,
+                estimated_inflation=position.estimated_inflation,
+                target_annual_yield=position.target_annual_yield,
+                is_active=position.is_active,
+                exit_price=position.exit_price,
+                exit_date=position.exit_date,
+                realized_profit_currency=round(realized_profit, 2),
+                realized_utility_percentage=round(realized_pct, 2),
+                actual_days_held=actual_days,
+            )
+        )
+
+    return PositionHistoryResponse(
+        total_realized_profit=round(total_realized, 2),
+        total_closed_positions=len(history_items),
+        positions=history_items,
     )
 
 

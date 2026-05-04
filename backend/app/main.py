@@ -1,3 +1,4 @@
+import logging
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -7,14 +8,22 @@ from app.api.endpoints.portfolio import router as portfolio_router
 from app.core.config import settings
 from app.core.database import Base, engine
 
+logger = logging.getLogger(__name__)
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """
     Al iniciar la aplicación, crea todas las tablas definidas en los modelos SQLAlchemy
     en la base de datos de Supabase si no existen aún.
+    Si la base de datos no está disponible, el servidor arranca igual para permitir
+    diagnóstico; las rutas que requieran DB fallarán con un error claro.
     """
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+        logger.info("Tables created successfully.")
+    except Exception as exc:
+        logger.warning("Could not create tables: %s", exc)
     yield
 
 

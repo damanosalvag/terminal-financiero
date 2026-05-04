@@ -1,4 +1,4 @@
-const API_BASE = "http://localhost:8000";
+const API_BASE = "/api";
 
 export interface PortfolioPosition {
   id: string;
@@ -33,7 +33,33 @@ export interface PortfolioSummary {
 export async function getPortfolioSummary(): Promise<PortfolioSummary> {
   const res = await fetch(`${API_BASE}/portfolio/summary`);
   if (!res.ok) {
-    throw new Error(`Error fetching summary: ${res.status}`);
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Error ${res.status} al obtener resumen. ${detail}`);
+  }
+  return res.json();
+}
+
+export interface PositionCreatePayload {
+  ticker: string;
+  quantity: number;
+  buy_price: number;
+  buy_date: string;
+  commission?: number;
+  estimated_inflation?: number;
+  target_annual_yield?: number;
+}
+
+export async function createPosition(
+  payload: PositionCreatePayload
+): Promise<PortfolioPosition> {
+  const res = await fetch(`${API_BASE}/portfolio/`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...payload, currency: "USD" }),
+  });
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Error ${res.status} al crear posición. ${detail}`);
   }
   return res.json();
 }
@@ -49,7 +75,31 @@ export async function closePosition(
     body: JSON.stringify({ exit_price, exit_date }),
   });
   if (!res.ok) {
-    throw new Error(`Error closing position: ${res.status}`);
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Error ${res.status} al cerrar posición. ${detail}`);
+  }
+  return res.json();
+}
+
+export interface PositionHistoryItem extends PortfolioPosition {
+  exit_price: number;
+  exit_date: string;
+  realized_profit_currency: number;
+  realized_utility_percentage: number;
+  actual_days_held: number;
+}
+
+export interface PositionHistoryResponse {
+  total_realized_profit: number;
+  total_closed_positions: number;
+  positions: PositionHistoryItem[];
+}
+
+export async function getPortfolioHistory(): Promise<PositionHistoryResponse> {
+  const res = await fetch(`${API_BASE}/portfolio/history`);
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Error ${res.status} al obtener historial. ${detail}`);
   }
   return res.json();
 }

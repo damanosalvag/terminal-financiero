@@ -79,3 +79,19 @@ class PortfolioSummaryResponse(BaseModel):
     total_current_value: float
     global_utility_percentage: float
     positions: list[PositionAnalysisResponse]
+
+
+class PositionHistoryItem(PositionResponse):
+    """Posición cerrada con métricas de utilidad realizada."""
+
+    realized_profit_currency: float
+    realized_utility_percentage: float
+    actual_days_held: int
+
+
+class PositionHistoryResponse(BaseModel):
+    """Resumen de posiciones cerradas con ganancia/pérdida total realizada."""
+
+    total_realized_profit: float
+    total_closed_positions: int
+    positions: list[PositionHistoryItem]
