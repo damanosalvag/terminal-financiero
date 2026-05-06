@@ -181,3 +181,70 @@ def calculate_rsi(closing_prices: list[float], period: int = 14) -> float | None
 
     # Retornar el último valor de RSI calculado
     return round(rsi_values[-1], 2) if rsi_values else None
+
+
+def calculate_graham_number(eps: float | None, bvps: float | None) -> float | None:
+    """
+    Calcula el Número de Graham: sqrt(22.5 × EPS × BVPS).
+    Fórmula clásica de Benjamin Graham para estimar el valor intrínseco máximo
+    que un inversor defensivo debería pagar por una acción.
+
+    Args:
+        eps: Earnings Per Share (trailing).
+        bvps: Book Value Per Share.
+
+    Returns:
+        Número de Graham redondeado a 2 decimales, o None si los datos son inválidos.
+    """
+    if eps is None or bvps is None or eps <= 0 or bvps <= 0:
+        return None
+    return round((22.5 * eps * bvps) ** 0.5, 2)
+
+
+def calculate_simple_dcf(
+    free_cashflow: float | None,
+    growth_rate: float = 0.05,
+    discount_rate: float = 0.09,
+    years: int = 10,
+) -> float | None:
+    """
+    Calcula un valor intrínseco simplificado vía Discounted Cash Flow (DCF).
+    Proyecta el FCF actual con una tasa de crecimiento constante por 'years' años
+    y descuenta los flujos a la tasa de descuento especificada.
+
+    Args:
+        free_cashflow: Free Cash Flow actual.
+        growth_rate: Tasa de crecimiento anual (default 5%).
+        discount_rate: Tasa de descuento (default 9%).
+        years: Años a proyectar (default 10).
+
+    Returns:
+        Valor presente de los flujos proyectados, o None si el FCF es inválido.
+    """
+    if free_cashflow is None or free_cashflow <= 0:
+        return None
+
+    total_value = 0.0
+    for year in range(1, years + 1):
+        projected_fcf = free_cashflow * ((1.0 + growth_rate) ** year)
+        discounted = projected_fcf / ((1.0 + discount_rate) ** year)
+        total_value += discounted
+
+    return round(total_value, 2)
+
+
+def calculate_historical_multiple_value(eps: float | None, target_pe: float = 15.0) -> float | None:
+    """
+    Calcula el valor intrínseco basado en un múltiplo P/E histórico objetivo.
+    Valor = EPS × P/E objetivo.
+
+    Args:
+        eps: Earnings Per Share (trailing).
+        target_pe: Múltiplo P/E objetivo (default 15x).
+
+    Returns:
+        Valor intrínseco por múltiplo, o None si el EPS es inválido.
+    """
+    if eps is None or eps <= 0:
+        return None
+    return round(eps * target_pe, 2)

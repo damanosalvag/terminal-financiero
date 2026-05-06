@@ -22,6 +22,8 @@ export interface PositionAnalysis extends PortfolioPosition {
   target_exit_price: number;
   current_utility_percentage: number;
   current_rsi: number | null;
+  sector: string;
+  daily_change_pct: number | null;
 }
 
 export interface PortfolioSummary {
@@ -151,4 +153,23 @@ export async function removeWatchlistTicker(id: string): Promise<void> {
     const detail = await res.text().catch(() => "");
     throw new Error(`Error ${res.status} al eliminar ticker. ${detail}`);
   }
+}
+
+export interface MarketHeatmapAsset {
+  ticker: string;
+  change_pct: number;
+}
+
+export interface MarketHeatmapSector {
+  sector: string;
+  assets: MarketHeatmapAsset[];
+}
+
+export async function getMarketHeatmap(): Promise<MarketHeatmapSector[]> {
+  const res = await fetch(`${API_BASE}/analysis/market-heatmap`);
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Error ${res.status} al obtener heatmap. ${detail}`);
+  }
+  return res.json();
 }

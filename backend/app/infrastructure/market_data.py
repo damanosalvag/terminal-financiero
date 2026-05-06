@@ -153,6 +153,77 @@ class YahooFinanceClient:
                 f"Underlying error: {exc}"
             ) from exc
 
+    def get_fundamentals(self, ticker: str) -> dict[str, Any]:
+        """
+        Obtiene ratios fundamentales desde Yahoo Finance para análisis de valor intrínseco.
+
+        Args:
+            ticker: Símbolo bursátil.
+
+        Returns:
+            Diccionario con trailingPE, priceToSales, dividendYield, debtToEquity,
+            freeCashflow, trailingEps, bookValue. None si el dato no está disponible.
+
+        Raises:
+            ValueError: Si el ticker no existe o la API falla.
+        """
+        try:
+            t = yf.Ticker(ticker)
+            info = t.info
+
+            def _safe_float(key: str) -> float | None:
+                val = info.get(key)
+                return float(val) if val is not None else None
+
+            # Datos de dividendos
+            dividend_info: dict[str, Any] = {
+                "next_ex_date": _safe_float("exDividendDate"),
+                "history": [],
+                "payments_per_year": 0,
+            }
+            try:
+                if not t.dividends.empty:
+                    now_ts = pd.Timestamp.now(tz=t.dividends.index.tz) if t.dividends.index.tz else pd.Timestamp.now()
+                    one_year_ago = now_ts - pd.Timedelta(days=365)
+                    recent_divs = t.dividends[t.dividends.index >= one_year_ago]
+
+                    for date, amount in recent_divs.items():
+                        dividend_info["history"].append({
+                            "date": date.strftime("%Y-%m-%d"),
+                            "amount": round(float(amount), 4),
+                        })
+                    dividend_info["payments_per_year"] = len(recent_divs)
+            except Exception:
+                pass
+
+            return {
+                "trailing_pe": _safe_float("trailingPE"),
+                "price_to_sales": _safe_float("priceToSalesTrailing12Months"),
+                "dividend_yield": _safe_float("dividendYield"),
+                "debt_to_equity": _safe_float("debtToEquity"),
+                "free_cashflow": _safe_float("freeCashflow"),
+                "trailing_eps": _safe_float("trailingEps"),
+                "forward_eps": _safe_float("forwardEps"),
+                "book_value": _safe_float("bookValue"),
+                "shares_outstanding": _safe_float("sharesOutstanding"),
+                "earnings_timestamp": _safe_float("earningsTimestamp"),
+                "revenue_growth": _safe_float("revenueGrowth"),
+                "earnings_growth": _safe_float("earningsGrowth"),
+                "sector": info.get("sector", "Unknown"),
+                "target_mean_price": _safe_float("targetMeanPrice"),
+                "target_median_price": _safe_float("targetMedianPrice"),
+                "analyst_opinions": _safe_float("numberOfAnalystOpinions"),
+                "recommendation": info.get("recommendationKey"),
+                "dividend_info": dividend_info,
+            }
+
+        except Exception as exc:
+            logger.exception("Network or API failure fetching fundamentals for ticker=%s", ticker)
+            raise ValueError(
+                f"Ticker not found or data unavailable: '{ticker}'. "
+                f"Underlying error: {exc}"
+            ) from exc
+
     def get_dividends_since(self, ticker: str, start_date: datetime) -> float:
         """
         Obtiene la suma de dividendos pagados por el ticker desde start_date hasta hoy.
@@ -197,3 +268,33 @@ class YahooFinanceClient:
                 f"Ticker not found or data unavailable: '{ticker}'. "
                 f"Underlying error: {exc}"
             ) from exc
+
+    def get_recent_news(self, ticker: str) -> list[dict[str, str | None]]:
+        """
+        Obtiene las últimas noticias del ticker desde Yahoo Finance.
+
+        Args:
+            ticker: Símbolo bursátil.
+
+        Returns:
+            Lista de diccionarios con 'title', 'publisher', 'link'.
+            Lista vacía si no hay noticias o el ticker no existe.
+        """
+        try:
+            news_items = yf.Ticker(ticker).news
+            if not news_items:
+                return []
+
+            articles: list[dict[str, str | None]] = []
+            for item in news_items[:5]:
+                articles.append({
+                    "title": (item.get("content", {}) or {}).get("title"),
+                    "publisher": (item.get("content", {}) or {}).get("pubDate") or item.get("publisher"),
+                    "link": (item.get("content", {}) or {}).get("canonicalUrl") or item.get("link"),
+                })
+
+            return [a for a in articles if a["title"]]
+
+        except Exception as exc:
+            logger.exception("Error fetching news for ticker=%s", ticker)
+            return []

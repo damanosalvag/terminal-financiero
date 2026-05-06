@@ -71,6 +71,8 @@ class PositionAnalysisResponse(PositionResponse):
     target_exit_price: float
     current_utility_percentage: float
     current_rsi: float | None = None
+    sector: str = "Unknown"
+    daily_change_pct: float | None = None
 
 
 class PortfolioSummaryResponse(BaseModel):

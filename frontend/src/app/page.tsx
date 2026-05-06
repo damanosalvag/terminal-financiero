@@ -5,12 +5,14 @@ import Link from "next/link";
 import ClosePositionModal from "@/components/ClosePositionModal";
 import NewPositionModal from "@/components/NewPositionModal";
 import {
+  type MarketHeatmapSector,
   type PortfolioSummary,
   type PositionAnalysis,
   type PositionHistoryItem,
   type PositionHistoryResponse,
   type WatchlistTicker,
   addWatchlistTicker,
+  getMarketHeatmap,
   getPortfolioHistory,
   getPortfolioSummary,
   getWatchlist,
@@ -18,7 +20,7 @@ import {
 } from "./api";
 
 type ViewState = "loading" | "error" | "success" | "idle";
-type Tab = "active" | "history" | "radar";
+type Tab = "active" | "history" | "radar" | "heatmap";
 
 export default function Dashboard() {
   const [viewState, setViewState] = useState<ViewState>("loading");
@@ -37,6 +39,10 @@ export default function Dashboard() {
   const [watchlist, setWatchlist] = useState<WatchlistTicker[] | null>(null);
   const [newTicker, setNewTicker] = useState("");
   const [adding, setAdding] = useState(false);
+
+  const [heatmapData, setHeatmapData] = useState<MarketHeatmapSector[] | null>(null);
+  const [heatmapView, setHeatmapView] = useState<ViewState>("idle");
+  const [heatmapError, setHeatmapError] = useState("");
 
   const fetchSummary = useCallback(async () => {
     setViewState("loading");
@@ -100,6 +106,19 @@ export default function Dashboard() {
     }
   };
 
+  const fetchHeatmap = useCallback(async () => {
+    setHeatmapView("loading");
+    setHeatmapError("");
+    try {
+      const data = await getMarketHeatmap();
+      setHeatmapData(data);
+      setHeatmapView("success");
+    } catch (err) {
+      setHeatmapError(err instanceof Error ? err.message : "Error al cargar heatmap");
+      setHeatmapView("error");
+    }
+  }, []);
+
   const handleTabChange = (newTab: Tab) => {
     setTab(newTab);
     if (newTab === "history" && history === null && historyView === "idle") {
@@ -107,6 +126,9 @@ export default function Dashboard() {
     }
     if (newTab === "radar" && watchlist === null && watchlistView === "idle") {
       fetchWatchlist();
+    }
+    if (newTab === "heatmap" && heatmapData === null && heatmapView === "idle") {
+      fetchHeatmap();
     }
   };
 
@@ -193,6 +215,12 @@ export default function Dashboard() {
         >
           Radar (Watchlist)
         </TabButton>
+        <TabButton
+          active={tab === "heatmap"}
+          onClick={() => handleTabChange("heatmap")}
+        >
+          Market Heatmap
+        </TabButton>
       </nav>
 
       {/* Active Positions View */}
@@ -207,6 +235,56 @@ export default function Dashboard() {
               valueClassName={utilityColor}
             />
           </section>
+
+          {/* Heatmap Sectorial */}
+          {s.positions.length > 0 && (() => {
+            const grouped: Record<string, typeof s.positions> = {};
+            s.positions.forEach(p => {
+              const sec = p.sector || "Unknown";
+              if (!grouped[sec]) grouped[sec] = [];
+              grouped[sec].push(p);
+            });
+            return (
+              <section className="mb-6">
+                <h2 className="mb-3 text-xs font-bold text-foreground/50 uppercase tracking-widest font-mono">
+                  Heatmap Sectorial
+                </h2>
+                <div className="flex flex-wrap gap-3">
+                  {Object.entries(grouped).map(([sector, positions]) => (
+                    <div key={sector} className="rounded-xl border border-border bg-surface p-3 min-w-[180px]">
+                      <p className="text-[10px] text-foreground/40 uppercase tracking-wider font-mono mb-2">
+                        {sector}
+                      </p>
+                      <div className="flex flex-wrap gap-1.5">
+                        {positions.map((p) => {
+                          const pct = p.daily_change_pct;
+                          const bg =
+                            pct == null ? "bg-foreground/10"
+                              : pct > 1 ? "bg-[var(--positive)]/80"
+                              : pct > 0 ? "bg-[var(--positive)]/40"
+                              : pct < -1 ? "bg-[var(--negative)]/80"
+                              : "bg-[var(--negative)]/40";
+                          const textColor = pct == null ? "text-foreground/60"
+                            : Math.abs(pct) > 1 ? "text-white"
+                            : "text-foreground/80";
+                          return (
+                            <Link
+                              key={p.id}
+                              href={`/asset/${p.ticker}`}
+                              className={`rounded-md px-2 py-1 text-[10px] font-bold font-mono ${bg} ${textColor} hover:ring-1 hover:ring-accent/50 transition-all cursor-pointer`}
+                              title={`${p.ticker}\nCambio diario: ${pct != null ? (pct >= 0 ? "+" : "") + pct.toFixed(2) + "%" : "N/D"}\nUtilidad: ${p.current_utility_percentage >= 0 ? "+" : ""}${p.current_utility_percentage.toFixed(2)}%\nPrecio: $${p.current_price.toFixed(2)}`}
+                            >
+                              {p.ticker}
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            );
+          })()}
 
           <section>
             <h2 className="mb-4 text-lg font-semibold text-foreground/80 font-mono">
@@ -530,6 +608,80 @@ export default function Dashboard() {
                 </div>
               )}
             </>
+          )}
+        </section>
+      )}
+
+      {/* Market Heatmap View */}
+      {tab === "heatmap" && (
+        <section>
+          <h2 className="mb-4 text-lg font-semibold text-foreground/80 font-mono">
+            Market Heatmap — S&P 500
+          </h2>
+
+          {(heatmapView === "loading" || heatmapView === "idle") && (
+            <div className="rounded-xl border border-border bg-surface px-6 py-16 text-center animate-pulse">
+              <p className="text-sm font-bold text-foreground/40 uppercase tracking-widest font-mono">
+                Cargando heatmap del mercado...
+              </p>
+              <p className="mt-2 text-xs text-foreground/20 font-mono">
+                Descargando datos de ~500 tickers del S&P 500
+              </p>
+            </div>
+          )}
+
+          {heatmapView === "error" && (
+            <div className="rounded-xl border border-border bg-surface px-6 py-8 text-center space-y-3">
+              <p className="text-negative font-mono text-sm">{heatmapError}</p>
+              <button
+                onClick={fetchHeatmap}
+                className="rounded-lg bg-surface px-4 py-1.5 text-xs font-medium text-foreground border border-border hover:bg-border/50 transition-colors"
+              >
+                Reintentar
+              </button>
+            </div>
+          )}
+
+          {heatmapView === "success" && heatmapData && (
+            <div className="flex flex-col gap-3">
+              {heatmapData.map((sector) => (
+                <div key={sector.sector} className="rounded-xl border border-border bg-surface overflow-hidden">
+                  <div className="px-3 py-2 border-b border-border">
+                    <p className="text-[10px] font-bold text-foreground/50 uppercase tracking-widest font-mono">
+                      {sector.sector}
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap p-2 gap-1">
+                    {sector.assets.map((asset) => {
+                      const pct = asset.change_pct;
+                      const bg =
+                        pct > 1.5 ? "#25c26e"
+                        : pct > 0 ? "#1b5e20"
+                        : pct < -1.5 ? "#ff554a"
+                        : pct < 0 ? "#b71c1c"
+                        : "#3a3f4a";
+                      const sign = pct >= 0 ? "+" : "";
+                      return (
+                        <Link
+                          key={asset.ticker}
+                          href={`/asset/${asset.ticker}`}
+                          className="flex flex-col items-center justify-center rounded-md px-2 py-1.5 min-w-[70px] flex-grow hover:ring-1 hover:ring-white/20 transition-all cursor-pointer"
+                          style={{ backgroundColor: bg }}
+                          title={`${asset.ticker}\nCambio diario: ${sign}${pct.toFixed(2)}%`}
+                        >
+                          <span className="text-[11px] font-bold font-mono text-white leading-tight">
+                            {asset.ticker}
+                          </span>
+                          <span className="text-[10px] font-mono text-white/80 leading-tight">
+                            {sign}{pct.toFixed(2)}%
+                          </span>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
           )}
         </section>
       )}

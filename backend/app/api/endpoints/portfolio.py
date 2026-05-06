@@ -7,6 +7,7 @@ y el cliente de datos de mercado. La lógica de negocio vive en /services, no aq
 import uuid
 from datetime import datetime, timezone
 
+import yfinance as yf
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
@@ -34,6 +35,23 @@ router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
 # Cliente de mercado instanciado a nivel de módulo.
 # Si se cambia de proveedor, solo se reemplaza esta línea.
 market_client = YahooFinanceClient()
+
+# Caché de sectores en memoria (los sectores rara vez cambian)
+_sector_cache: dict[str, str] = {}
+
+
+def _get_sector(ticker: str) -> str:
+    """Obtiene el sector de un ticker con caché en memoria."""
+    if ticker in _sector_cache:
+        return _sector_cache[ticker]
+    try:
+        info = yf.Ticker(ticker).info
+        sector = info.get("sector", "Unknown")
+        _sector_cache[ticker] = sector
+        return sector
+    except Exception:
+        _sector_cache[ticker] = "Unknown"
+        return "Unknown"
 
 
 @router.post("/", response_model=PositionResponse, status_code=201)
@@ -95,8 +113,18 @@ def portfolio_summary(
             historical_close = market_client.get_historical_prices(position.ticker, period="1y")
             current_rsi = calculate_rsi(historical_close)
         except ValueError:
-            # Un ticker problemático no debe detener el análisis del resto del portafolio
             continue
+
+        # Daily change: diferencia porcentual entre el último y penúltimo cierre
+        daily_change_pct: float | None = None
+        if historical_close and len(historical_close) >= 2:
+            prev = historical_close[-2]
+            last = historical_close[-1]
+            if prev > 0:
+                daily_change_pct = round(((last - prev) / prev) * 100, 2)
+
+        # Sector con caché
+        sector = _get_sector(position.ticker)
 
         commission_per_share = position.commission / position.quantity
         days_held = calculate_days_held(position.buy_date, now)
@@ -145,6 +173,8 @@ def portfolio_summary(
                 target_exit_price=target_exit,
                 current_utility_percentage=utility_pct,
                 current_rsi=current_rsi,
+                sector=sector,
+                daily_change_pct=daily_change_pct,
             )
         )
 
