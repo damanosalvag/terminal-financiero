@@ -1,6 +1,5 @@
 """
 Rutas del módulo de Screener / Escáner de Mercado.
-Filtra el universo de tickers usando indicadores técnicos descargados en batch.
 """
 
 from pydantic import BaseModel
@@ -12,32 +11,24 @@ router = APIRouter(prefix="/screener", tags=["Screener"])
 
 
 class ScreenerFilters(BaseModel):
-    rsi_below_40: bool = False
-    macd_bullish: bool = False
-    above_ema_200: bool = False
-    rsi_above_70: bool = False
+    specific_ticker: str | None = None
+    rsi_operator: str | None = None    # '<=' o '>='
+    rsi_value: float | None = None     # número libre (ej. 35, 65, 50)
+    macd_signal: str | None = None     # 'Alcista', 'Bajista'
+    ema_200: str | None = None         # 'Sobre', 'Bajo'
+    pe_range: str | None = None        # '< 15', '15-30', '> 30'
+    ps_range: str | None = None        # '< 2', '2-5', '> 5'
+    market_cap_range: str | None = None  # '> 200B', '10B-200B', '< 10B'
+    beta_range: str | None = None      # '< 1', '> 1'
+    daily_change: str | None = None    # 'Positiva', 'Negativa'
+    sector: str | None = None          # 'Technology', etc.
+    volume_range: str | None = None    # '= 1', '< 1', '> 1.5'
 
 
 @router.post("/scan")
-def run_screener(filters: ScreenerFilters):
-    """
-    Ejecuta un escaneo del mercado con los filtros técnicos seleccionados.
-
-    Body (JSON):
-        {
-            "rsi_below_40": true,
-            "macd_bullish": true,
-            "above_ema_200": false,
-            "rsi_above_70": false
-        }
-
-    Returns:
-        {
-            "count": 8,
-            "results": [{"ticker", "current_price", "rsi", "macd_signal", "macd_value", "ema_200_diff_pct"}]
-        }
-    """
+def run_screener(filters: ScreenerFilters, offset: int = 0, limit: int = 30):
+    """Ejecuta un escaneo del mercado con los filtros seleccionados."""
     try:
-        return scan_market(filters.model_dump())
+        return scan_market(filters.model_dump(), offset=offset, limit=limit)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Screener scan failed: {exc}") from exc

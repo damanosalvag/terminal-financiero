@@ -121,6 +121,8 @@ export interface WatchlistTicker {
   current_rsi: number | null;
   target_price: number | null;
   margin_of_safety: number | null;
+  importance_score: number;
+  reason_note: string | null;
 }
 
 export async function getWatchlist(): Promise<WatchlistTicker[]> {
@@ -132,16 +134,26 @@ export async function getWatchlist(): Promise<WatchlistTicker[]> {
   return res.json();
 }
 
-export async function addWatchlistTicker(ticker: string): Promise<WatchlistTicker> {
+export async function addWatchlistTicker(
+  ticker: string,
+  importance_score?: number,
+  reason_note?: string
+): Promise<WatchlistTicker> {
   const res = await fetch(`${API_BASE}/watchlist/`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ticker }),
+    body: JSON.stringify({ ticker, importance_score: importance_score ?? 1, reason_note: reason_note ?? null }),
   });
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new Error(`Error ${res.status} al agregar ticker. ${detail}`);
   }
+  return res.json();
+}
+
+export async function checkWatchlistTicker(ticker: string): Promise<{ is_in_watchlist: boolean }> {
+  const res = await fetch(`${API_BASE}/watchlist/check/${ticker}`);
+  if (!res.ok) return { is_in_watchlist: false };
   return res.json();
 }
 
@@ -181,6 +193,30 @@ export async function getMarketHeatmap(
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new Error(`Error ${res.status} al obtener heatmap. ${detail}`);
+  }
+  return res.json();
+}
+
+export interface PortfolioNewsItem {
+  ticker: string;
+  llm_analysis: {
+    sentiment: string;
+    impact_summary: string;
+    macro_driver: string;
+  } | null;
+  news: { title: string | null; publisher: string | null; link: string | null }[];
+}
+
+export interface PortfolioNewsResponse {
+  count: number;
+  results: PortfolioNewsItem[];
+}
+
+export async function getPortfolioNewsIntel(): Promise<PortfolioNewsResponse> {
+  const res = await fetch(`${API_BASE}/portfolio/news-intel`);
+  if (!res.ok) {
+    const detail = await res.text().catch(() => "");
+    throw new Error(`Error ${res.status} al obtener news intel. ${detail}`);
   }
   return res.json();
 }

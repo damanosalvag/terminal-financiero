@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import DateTime, String
+from sqlalchemy import DateTime, Integer, String
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -23,6 +23,8 @@ class WatchlistTicker(Base):
     )
     ticker: Mapped[str] = mapped_column(String(10), nullable=False, unique=True, index=True)
     added_date: Mapped[datetime] = mapped_column(DateTime, nullable=False, default=datetime.utcnow)
+    importance_score: Mapped[int] = mapped_column(Integer, default=1)
+    reason_note: Mapped[str | None] = mapped_column(String(255), nullable=True, default=None)
 
     def __repr__(self) -> str:
         return f"<WatchlistTicker(id={self.id}, ticker={self.ticker})>"

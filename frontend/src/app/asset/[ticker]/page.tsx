@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { addWatchlistTicker } from "@/app/api";
+import { addWatchlistTicker, checkWatchlistTicker } from "@/app/api";
 import {
   CandlestickSeries,
   ColorType,
@@ -163,6 +163,13 @@ export default function AssetCockpit() {
   const [isNarrativeLoading, setIsNarrativeLoading] = useState(true);
   const [watchlistAdded, setWatchlistAdded] = useState(false);
   const [watchlistAdding, setWatchlistAdding] = useState(false);
+
+  // Check if already in watchlist on mount
+  useEffect(() => {
+    checkWatchlistTicker(ticker).then(r => {
+      if (r.is_in_watchlist) setWatchlistAdded(true);
+    }).catch(() => {});
+  }, [ticker]);
 
   const chartRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -376,11 +383,16 @@ export default function AssetCockpit() {
             <button
               onClick={async () => {
                 if (watchlistAdding) return;
+                const importanceStr = prompt("Nivel de importancia (1-5):", "3");
+                if (!importanceStr) return;
+                const importance = parseInt(importanceStr);
+                if (isNaN(importance) || importance < 1 || importance > 5) { alert("Valor inválido (1-5)"); return; }
+                const reason = prompt("Razón de seguimiento:", "") || "";
                 setWatchlistAdding(true);
                 try {
-                  await addWatchlistTicker(ticker);
+                  await addWatchlistTicker(ticker, importance, reason);
                   setWatchlistAdded(true);
-                } catch { /* Silencioso: ya existe o error */ }
+                } catch { /* Silencioso */ }
                 finally { setWatchlistAdding(false); }
               }}
               disabled={watchlistAdded || watchlistAdding}

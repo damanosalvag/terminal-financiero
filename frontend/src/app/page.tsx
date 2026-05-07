@@ -7,6 +7,7 @@ import NewPositionModal from "@/components/NewPositionModal";
 import {
   type MarketHeatmapResponse,
   type MarketHeatmapSector,
+  type PortfolioNewsResponse,
   type PortfolioSummary,
   type PositionAnalysis,
   type PositionHistoryItem,
@@ -15,6 +16,7 @@ import {
   addWatchlistTicker,
   getMarketHeatmap,
   getPortfolioHistory,
+  getPortfolioNewsIntel,
   getPortfolioSummary,
   getWatchlist,
   removeWatchlistTicker,
@@ -46,6 +48,9 @@ export default function Dashboard() {
   const [heatmapError, setHeatmapError] = useState("");
   const [heatmapMarket, setHeatmapMarket] = useState("sp500");
   const [heatmapLoadingMore, setHeatmapLoadingMore] = useState(false);
+
+  const [newsIntel, setNewsIntel] = useState<PortfolioNewsResponse | null>(null);
+  const [newsIntelLoading, setNewsIntelLoading] = useState(false);
 
   const fetchSummary = useCallback(async () => {
     setViewState("loading");
@@ -157,6 +162,17 @@ export default function Dashboard() {
   useEffect(() => {
     fetchSummary();
   }, [fetchSummary]);
+
+  // News Intel: se carga en segundo plano después del summary
+  useEffect(() => {
+    if (viewState !== "success" || !summary || summary.positions.length === 0) return;
+    if (newsIntel !== null || newsIntelLoading) return;
+    setNewsIntelLoading(true);
+    getPortfolioNewsIntel()
+      .then(setNewsIntel)
+      .catch(() => {})
+      .finally(() => setNewsIntelLoading(false));
+  }, [viewState, summary, newsIntel, newsIntelLoading]);
 
   if (viewState === "loading") {
     return <Skeleton />;
@@ -387,6 +403,70 @@ export default function Dashboard() {
               </div>
             )}
           </section>
+
+          {/* News Intel Panel — IA-powered news analysis */}
+          {newsIntel && newsIntel.results.length > 0 && (
+            <section className="mb-8">
+              <h2 className="mb-3 text-xs font-bold text-foreground/50 uppercase tracking-widest font-mono flex items-center gap-2">
+                Inteligencia de Noticias
+                <span className="text-[9px] text-accent/60 normal-case tracking-normal">DeepSeek AI</span>
+              </h2>
+              <div className="flex flex-wrap gap-3">
+                {newsIntel.results.filter(n => n.llm_analysis).map((item) => {
+                  const analysis = item.llm_analysis!;
+                  const borderColor =
+                    analysis.sentiment === "Bullish" ? "border-[var(--positive)]/40 bg-[var(--positive)]/5"
+                    : analysis.sentiment === "Bearish" ? "border-[var(--negative)]/40 bg-[var(--negative)]/5"
+                    : "border-border";
+                  const glowColor =
+                    analysis.sentiment === "Bullish" ? "#25c26e"
+                    : analysis.sentiment === "Bearish" ? "#ff554a"
+                    : "#6b7280";
+                  return (
+                    <div
+                      key={item.ticker}
+                      className={`rounded-xl border p-4 min-w-[260px] max-w-sm flex flex-col gap-2 ${borderColor}`}
+                      style={{ boxShadow: `0 0 0 1px ${glowColor}20` }}
+                    >
+                      <div className="flex items-center justify-between">
+                        <Link href={`/asset/${item.ticker}`} className="text-sm font-bold font-mono text-foreground hover:text-accent transition-colors">
+                          {item.ticker}
+                        </Link>
+                        <span className={`text-[10px] font-bold font-mono uppercase px-2 py-0.5 rounded-md border ${
+                          analysis.sentiment === "Bullish" ? "text-[var(--positive)] border-[var(--positive)]/30 bg-[var(--positive)]/10"
+                          : analysis.sentiment === "Bearish" ? "text-[var(--negative)] border-[var(--negative)]/30 bg-[var(--negative)]/10"
+                          : "text-foreground/50 border-border"
+                        }`}>
+                          {analysis.sentiment}
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="rounded-md border border-accent/30 bg-accent/10 px-1.5 py-0.5 text-[10px] font-bold font-mono text-accent">
+                          {analysis.macro_driver}
+                        </span>
+                      </div>
+                      <p className="text-xs text-foreground/70 leading-relaxed font-mono">
+                        {analysis.impact_summary}
+                      </p>
+                      {item.news.length > 0 && (
+                        <div className="flex gap-2 mt-1">
+                          {item.news.slice(0, 2).map((n, i) => (
+                            n.link ? (
+                              <a key={i} href={n.link} target="_blank" rel="noopener noreferrer"
+                                className="text-[9px] text-foreground/30 hover:text-accent/60 transition-colors font-mono truncate max-w-[120px]"
+                                title={n.title ?? ""}>
+                                Fuente {i + 1}
+                              </a>
+                            ) : null
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </section>
+          )}
         </>
       )}
 
@@ -595,9 +675,14 @@ export default function Dashboard() {
                           className="hover:bg-foreground/[0.02] transition-colors"
                         >
                           <td className="px-4 py-3 font-semibold text-foreground">
-                            <Link href={`/asset/${w.ticker}`} className="hover:text-accent transition-colors">
-                              {w.ticker}
-                            </Link>
+                            <div className="flex items-center gap-1.5" title={w.reason_note ?? ""}>
+                              <Link href={`/asset/${w.ticker}`} className="hover:text-accent transition-colors">
+                                {w.ticker}
+                              </Link>
+                              <span className="text-[10px] text-accent/60">
+                                {"★".repeat(w.importance_score ?? 1)}
+                              </span>
+                            </div>
                           </td>
                           <td className="px-4 py-3 text-right text-foreground">
                             {w.current_price !== null

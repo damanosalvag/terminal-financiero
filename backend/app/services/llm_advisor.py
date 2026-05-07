@@ -96,3 +96,63 @@ def get_strategic_intel(ticker: str, news: list[dict[str, str | None]]) -> dict[
     except Exception as exc:
         logger.exception("DeepSeek API call failed for ticker=%s: %s", ticker, exc)
         raise
+
+
+_NEWS_INTEL_PROMPT = (
+    "Eres un analista macroeconómico implacable. Analiza las siguientes noticias del ticker {ticker} "
+    "con un enfoque materialista y estructural. Prioriza impactos tangibles sobre la economía real: "
+    "cadenas de suministro físicas, commodities, rearme militar, infraestructura energética, "
+    "y capacidad industrial. Ignora el ruido superficial de relaciones públicas.\n\n"
+    "Noticias recientes:\n{news_summary}\n\n"
+    "Devuelve UNICAMENTE un objeto JSON valido con esta estructura:\n"
+    '{{"sentiment": "Bullish"|"Bearish"|"Neutral", '
+    '"impact_summary": "2 frases cortas maximo describiendo el impacto tangible.", '
+    '"macro_driver": "2-3 palabras, ej: Supply Chain, Energy Costs, Rearmament"}}\n'
+    "You MUST return your response in valid JSON format."
+)
+
+
+def analyze_portfolio_news(ticker: str, news_items: list[dict[str, str | None]]) -> dict[str, Any] | None:
+    """
+    Analiza noticias recientes de un ticker con un enfoque macro-materialista.
+    Usa DeepSeek para extraer sentimiento, resumen de impacto y driver macro.
+
+    Returns:
+        Dict con sentiment, impact_summary, macro_driver. None si no hay API key.
+    """
+    api_key = settings.DEEPSEEK_API_KEY
+    if not api_key:
+        return None
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return None
+
+    news_lines = []
+    for i, n in enumerate(news_items[:3], 1):
+        title = n.get("title", "Sin título")
+        news_lines.append(f"{i}. {title}")
+    news_summary = "\n".join(news_lines) if news_lines else "No hay noticias recientes."
+
+    prompt = _NEWS_INTEL_PROMPT.format(ticker=ticker, news_summary=news_summary)
+
+    try:
+        client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
+        response = client.chat.completions.create(
+            model="deepseek-chat",
+            messages=[{"role": "user", "content": prompt}],
+            response_format={"type": "json_object"},
+            temperature=0.2,
+            max_tokens=400,
+        )
+
+        raw = response.choices[0].message.content
+        if not raw:
+            return None
+
+        cleaned = raw.replace("```json", "").replace("```", "").strip()
+        return json.loads(cleaned)
+
+    except Exception:
+        return None

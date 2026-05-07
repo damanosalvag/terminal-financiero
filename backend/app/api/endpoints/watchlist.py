@@ -32,7 +32,11 @@ def add_watchlist_ticker(
     if existing:
         raise HTTPException(status_code=400, detail=f"Ticker already in watchlist: {ticker_upper}")
 
-    entry = WatchlistTicker(ticker=ticker_upper)
+    entry = WatchlistTicker(
+        ticker=ticker_upper,
+        importance_score=payload.importance_score,
+        reason_note=payload.reason_note[:255] if payload.reason_note else None,
+    )
     db.add(entry)
     db.commit()
     db.refresh(entry)
@@ -92,7 +96,21 @@ def list_watchlist(
                 current_rsi=current_rsi,
                 target_price=target_price,
                 margin_of_safety=margin_of_safety,
+                importance_score=entry.importance_score,
+                reason_note=entry.reason_note,
             )
         )
 
     return result
+
+
+@router.get("/check/{ticker}")
+def check_watchlist_ticker(
+    ticker: str,
+    db: Session = Depends(get_db),
+):
+    """Verifica si un ticker ya está en el watchlist."""
+    exists = db.query(WatchlistTicker).filter(
+        WatchlistTicker.ticker == ticker.strip().upper()
+    ).first()
+    return {"is_in_watchlist": exists is not None}

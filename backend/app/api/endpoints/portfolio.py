@@ -29,6 +29,13 @@ from app.services.finance_math import (
     calculate_rsi,
     calculate_target_exit_price,
 )
+try:
+    from app.services.llm_advisor import analyze_portfolio_news
+except ImportError:
+    analyze_portfolio_news = None  # type: ignore[assignment]
+
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
 
@@ -385,3 +392,44 @@ def close_position(
     db.commit()
     db.refresh(position)
     return PositionResponse.model_validate(position)
+
+
+@router.get("/news-intel")
+def get_news_intel(db: Session = Depends(get_db)):
+    """
+    Inteligencia de noticias para el portafolio activo.
+    Para cada ticker activo, obtiene noticias recientes y las analiza con IA (DeepSeek).
+    """
+    if analyze_portfolio_news is None:
+        raise HTTPException(status_code=503, detail="LLM advisor not available.")
+
+    positions = (
+        db.query(PortfolioPosition)
+        .filter(PortfolioPosition.is_active.is_(True))
+        .all()
+    )
+
+    unique_tickers = list({p.ticker for p in positions})
+    if not unique_tickers:
+        return {"count": 0, "results": []}
+
+    def analyze_one(ticker: str):
+        try:
+            news = market_client.get_recent_news(ticker)
+            llm_result = analyze_portfolio_news(ticker, news) if news else None
+            return {
+                "ticker": ticker,
+                "llm_analysis": llm_result,
+                "news": news[:3] if news else [],
+            }
+        except Exception:
+            return {
+                "ticker": ticker,
+                "llm_analysis": None,
+                "news": [],
+            }
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        results = list(executor.map(analyze_one, unique_tickers))
+
+    return {"count": len(results), "results": results}
