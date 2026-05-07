@@ -1,4 +1,5 @@
 "use client";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
@@ -183,8 +184,8 @@ export default function AssetCockpit() {
       setViewState("loading");
       try {
         const [chartRes, fundRes] = await Promise.all([
-          fetch(`/api/analysis/${ticker}/chart`),
-          fetch(`/api/analysis/${ticker}/fundamentals`),
+          fetch(`/${API_BASE}/analysis/${ticker}/chart`),
+          fetch(`/${API_BASE}/analysis/${ticker}/fundamentals`),
         ]);
         if (!chartRes.ok) {
           const detail = await chartRes.text().catch(() => "");

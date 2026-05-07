@@ -1,4 +1,5 @@
 "use client";
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 import { useState } from "react";
 import Link from "next/link";
@@ -134,7 +135,7 @@ export default function ScreenerPage() {
     off === 0 ? setScanning(true) : setLoadingMore(true);
     setError("");
     try {
-      const res = await fetch(`/api/screener/scan?offset=${off}&limit=30`, {
+      const res = await fetch(`/${API_BASE}/screener/scan?offset=${off}&limit=30`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildPayload()),
