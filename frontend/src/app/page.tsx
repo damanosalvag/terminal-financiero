@@ -5,6 +5,7 @@ import Link from "next/link";
 import ClosePositionModal from "@/components/ClosePositionModal";
 import NewPositionModal from "@/components/NewPositionModal";
 import {
+  type MarketHeatmapResponse,
   type MarketHeatmapSector,
   type PortfolioSummary,
   type PositionAnalysis,
@@ -40,9 +41,11 @@ export default function Dashboard() {
   const [newTicker, setNewTicker] = useState("");
   const [adding, setAdding] = useState(false);
 
-  const [heatmapData, setHeatmapData] = useState<MarketHeatmapSector[] | null>(null);
+  const [heatmapData, setHeatmapData] = useState<MarketHeatmapResponse | null>(null);
   const [heatmapView, setHeatmapView] = useState<ViewState>("idle");
   const [heatmapError, setHeatmapError] = useState("");
+  const [heatmapMarket, setHeatmapMarket] = useState("sp500");
+  const [heatmapLoadingMore, setHeatmapLoadingMore] = useState(false);
 
   const fetchSummary = useCallback(async () => {
     setViewState("loading");
@@ -106,18 +109,37 @@ export default function Dashboard() {
     }
   };
 
-  const fetchHeatmap = useCallback(async () => {
-    setHeatmapView("loading");
+  const fetchHeatmap = useCallback(async (mkt: string, off: number = 0, append: boolean = false) => {
+    if (off === 0) setHeatmapView("loading");
+    else setHeatmapLoadingMore(true);
     setHeatmapError("");
     try {
-      const data = await getMarketHeatmap();
-      setHeatmapData(data);
+      const data = await getMarketHeatmap(mkt, off, 100);
+      if (append && heatmapData) {
+        // Merge existing sectors with new data
+        const existingSectors = [...heatmapData.sectors];
+        data.sectors.forEach((newSec: MarketHeatmapSector) => {
+          const existing = existingSectors.find(s => s.sector === newSec.sector);
+          if (existing) {
+            const existingTickers = new Set(existing.assets.map(a => a.ticker));
+            existing.assets.push(...newSec.assets.filter(a => !existingTickers.has(a.ticker)));
+            existing.assets.sort((a, b) => Math.abs(b.change_pct) - Math.abs(a.change_pct));
+          } else {
+            existingSectors.push(newSec);
+          }
+        });
+        setHeatmapData({ ...data, sectors: existingSectors });
+      } else {
+        setHeatmapData(data);
+      }
       setHeatmapView("success");
     } catch (err) {
       setHeatmapError(err instanceof Error ? err.message : "Error al cargar heatmap");
       setHeatmapView("error");
+    } finally {
+      setHeatmapLoadingMore(false);
     }
-  }, []);
+  }, [heatmapData]);
 
   const handleTabChange = (newTab: Tab) => {
     setTab(newTab);
@@ -128,7 +150,7 @@ export default function Dashboard() {
       fetchWatchlist();
     }
     if (newTab === "heatmap" && heatmapData === null && heatmapView === "idle") {
-      fetchHeatmap();
+      fetchHeatmap(heatmapMarket, 0);
     }
   };
 
@@ -615,9 +637,27 @@ export default function Dashboard() {
       {/* Market Heatmap View */}
       {tab === "heatmap" && (
         <section>
-          <h2 className="mb-4 text-lg font-semibold text-foreground/80 font-mono">
-            Market Heatmap — S&P 500
-          </h2>
+          {/* Market Selector */}
+          <div className="mb-4 flex items-center justify-between">
+            <h2 className="text-lg font-semibold text-foreground/80 font-mono">
+              Market Heatmap — {heatmapMarket === "sp500" ? "S&P 500" : heatmapMarket === "dow" ? "Dow 30" : heatmapMarket === "nasdaq" ? "Nasdaq 100" : "Russell 2000"}
+            </h2>
+            <div className="flex gap-1 rounded-lg border border-border bg-surface p-1">
+              {(["sp500", "dow", "nasdaq", "russell"] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => { setHeatmapMarket(m); setHeatmapData(null); setHeatmapView("idle"); fetchHeatmap(m, 0); }}
+                  className={`rounded-md px-3 py-1 text-[10px] font-bold font-mono uppercase transition-colors ${
+                    heatmapMarket === m
+                      ? "bg-accent text-accent-foreground"
+                      : "text-foreground/50 hover:text-foreground/80"
+                  }`}
+                >
+                  {m === "sp500" ? "S&P 500" : m === "dow" ? "Dow" : m === "nasdaq" ? "Nasdaq" : "Russell"}
+                </button>
+              ))}
+            </div>
+          </div>
 
           {(heatmapView === "loading" || heatmapView === "idle") && (
             <div className="rounded-xl border border-border bg-surface px-6 py-16 text-center animate-pulse">
@@ -625,7 +665,7 @@ export default function Dashboard() {
                 Cargando heatmap del mercado...
               </p>
               <p className="mt-2 text-xs text-foreground/20 font-mono">
-                Descargando datos de ~500 tickers del S&P 500
+                Descargando datos de ~100 tickers
               </p>
             </div>
           )}
@@ -634,7 +674,7 @@ export default function Dashboard() {
             <div className="rounded-xl border border-border bg-surface px-6 py-8 text-center space-y-3">
               <p className="text-negative font-mono text-sm">{heatmapError}</p>
               <button
-                onClick={fetchHeatmap}
+                onClick={() => fetchHeatmap(heatmapMarket, 0)}
                 className="rounded-lg bg-surface px-4 py-1.5 text-xs font-medium text-foreground border border-border hover:bg-border/50 transition-colors"
               >
                 Reintentar
@@ -644,14 +684,14 @@ export default function Dashboard() {
 
           {heatmapView === "success" && heatmapData && (
             <div className="flex flex-col gap-3">
-              {heatmapData.map((sector) => (
+              {heatmapData.sectors.map((sector: MarketHeatmapSector) => (
                 <div key={sector.sector} className="rounded-xl border border-border bg-surface overflow-hidden">
                   <div className="px-3 py-2 border-b border-border">
                     <p className="text-[10px] font-bold text-foreground/50 uppercase tracking-widest font-mono">
                       {sector.sector}
                     </p>
                   </div>
-                  <div className="flex flex-wrap p-2 gap-1">
+                  <div className="flex flex-wrap p-1.5 gap-1">
                     {sector.assets.map((asset) => {
                       const pct = asset.change_pct;
                       const bg =
@@ -681,6 +721,21 @@ export default function Dashboard() {
                   </div>
                 </div>
               ))}
+
+              {/* Pagination: Load More */}
+              {heatmapData.current_offset + 100 < heatmapData.total_assets && (
+                <div className="flex justify-center">
+                  <button
+                    onClick={() => fetchHeatmap(heatmapMarket, heatmapData.current_offset + 100, true)}
+                    disabled={heatmapLoadingMore}
+                    className="rounded-lg border border-border bg-surface px-6 py-2.5 text-sm font-bold font-mono text-foreground/70 hover:text-foreground hover:border-accent/50 transition-colors disabled:opacity-50"
+                  >
+                    {heatmapLoadingMore
+                      ? "Cargando..."
+                      : `Cargar siguientes 100 activos (${heatmapData.total_assets - heatmapData.current_offset - 100} restantes)`}
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </section>

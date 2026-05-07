@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
+import { addWatchlistTicker } from "@/app/api";
 import {
   CandlestickSeries,
   ColorType,
@@ -160,6 +161,8 @@ export default function AssetCockpit() {
   const [fundamentals, setFundamentals] = useState<FundamentalsResponse | null>(null);
   const [narrative, setNarrative] = useState<NarrativeData | null>(null);
   const [isNarrativeLoading, setIsNarrativeLoading] = useState(true);
+  const [watchlistAdded, setWatchlistAdded] = useState(false);
+  const [watchlistAdding, setWatchlistAdding] = useState(false);
 
   const chartRef = useRef<HTMLDivElement>(null);
   const tooltipRef = useRef<HTMLDivElement>(null);
@@ -369,7 +372,29 @@ export default function AssetCockpit() {
           ← Dashboard
         </button>
         <div className="text-right">
-          <h1 className="text-2xl font-bold tracking-tight text-foreground font-mono">{ticker}</h1>
+          <div className="flex items-center gap-3 justify-end mb-1">
+            <button
+              onClick={async () => {
+                if (watchlistAdding) return;
+                setWatchlistAdding(true);
+                try {
+                  await addWatchlistTicker(ticker);
+                  setWatchlistAdded(true);
+                } catch { /* Silencioso: ya existe o error */ }
+                finally { setWatchlistAdding(false); }
+              }}
+              disabled={watchlistAdded || watchlistAdding}
+              className={`rounded-lg border px-3 py-1 text-[10px] font-bold font-mono uppercase transition-colors ${
+                watchlistAdded
+                  ? "border-[var(--positive)]/30 bg-[var(--positive)]/10 text-[var(--positive)]"
+                  : "border-accent/30 bg-accent/10 text-accent hover:bg-accent/20"
+              } disabled:opacity-50`}
+              title="Añadir al radar de watchlist"
+            >
+              {watchlistAdded ? "En Radar ✓" : watchlistAdding ? "..." : "+ Watchlist"}
+            </button>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground font-mono">{ticker}</h1>
+          </div>
           {currentPrice !== null && (
             <div className="flex items-end gap-4">
               <div>

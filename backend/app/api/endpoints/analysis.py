@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 import yfinance as yf
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.infrastructure.market_data import YahooFinanceClient
 from app.services.finance_math import (
@@ -171,34 +171,81 @@ def get_narrative(ticker: str):
 
 
 @router.get("/market-heatmap")
-def get_market_heatmap():
+def get_market_heatmap(
+    market: str = Query("sp500", description="Market: sp500, dow, nasdaq, russell"),
+    offset: int = Query(0, ge=0, description="Offset for pagination"),
+    limit: int = Query(100, ge=10, le=200, description="Max tickers per request"),
+):
     """
-    Heatmap del mercado: top 60 del S&P 500 por capitalización, agrupado por sector GICS.
-    Muestra los 15 tickers con mayor movimiento diario (absoluto) por sector.
-
-    Optimizado: solo 60 tickers (no 500) para respuesta en <5s.
+    Heatmap multi-mercado con paginación. Soportado: S&P 500, Dow 30, Nasdaq-100, Russell.
     """
     logger = logging.getLogger(__name__)
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                      "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
+
+    _RUSSELL_TICKERS = [
+        "SMCI", "CROX", "ELF", "CVNA", "CHWY", "FIX", "XPO", "AIT", "SSB", "HQY",
+        "WWD", "RMBS", "NOVT", "QLYS", "BMI", "ENSG", "FN", "SPSC", "EXPO", "LSTR",
+        "MTH", "TMHC", "KBH", "ITGR", "BCPC", "NEO", "POWI", "SLAB", "SYNA", "DIOD",
+        "MXL", "MRVL", "CRUS", "SMTC", "IDCC", "VECO", "ACLS", "FORM", "UCTT", "ICHR",
+        "APOG", "AEIS", "PLXS", "BHE", "JBL", "FLEX", "SANM", "CLS", "PLUS", "ARW",
+    ]
+
     try:
-        url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-                          "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        }
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
-        html_io = io.StringIO(resp.text)
-        sp500 = pd.read_html(html_io)[0]
+        if market == "sp500":
+            url = "https://en.wikipedia.org/wiki/List_of_S%26P_500_companies"
+            col = "GICS Sector"
+        elif market == "dow":
+            url = "https://en.wikipedia.org/wiki/Dow_Jones_Industrial_Average"
+            col = None
+        elif market == "nasdaq":
+            url = "https://en.wikipedia.org/wiki/Nasdaq-100"
+            col = None
+        elif market == "russell":
+            tickers = _RUSSELL_TICKERS
+            sector_map = {t: "Russell 2000" for t in tickers}
+            total = len(tickers)
+        else:
+            raise HTTPException(status_code=400, detail=f"Unknown market: {market}")
 
-        # Limitar a los primeros 60 (ordenados por market cap en Wikipedia)
-        sp500 = sp500.head(60)
+        if market != "russell":
+            resp = requests.get(url, headers=headers, timeout=15)
+            resp.raise_for_status()
+            html_io = io.StringIO(resp.text)
+            tables = pd.read_html(html_io)
 
-        # Sanitizar: Wikipedia usa dots (BRK.B), Yahoo usa dashes (BRK-B)
-        sp500["Symbol"] = sp500["Symbol"].str.replace(".", "-", regex=False)
-        tickers = sp500["Symbol"].tolist()
-        sector_map = dict(zip(sp500["Symbol"], sp500["GICS Sector"]))
+            # Buscar la tabla correcta: la que tenga columna 'Symbol' o 'Ticker'
+            table = None
+            for t in tables:
+                cols = [str(c) for c in t.columns]
+                if "Symbol" in cols or "Ticker" in cols:
+                    table = t
+                    break
+            if table is None:
+                raise HTTPException(status_code=500, detail="Could not find ticker table on Wikipedia page")
 
-        df = yf.download(tickers=" ".join(tickers), period="5d", progress=False, auto_adjust=True)
+            ticker_col = "Symbol" if "Symbol" in table.columns else "Ticker"
+            sector_col = next((col for col in table.columns if col in ("GICS Sector", "Sector", "Industry")), None)
+
+            symbols = table[ticker_col].tolist()
+            symbols = [str(s).replace(".", "-") for s in symbols]
+            total = len(symbols)
+            sector_map = {
+                s: str(table.iloc[i][sector_col]) if sector_col and i < len(table) else market.upper()
+                for i, s in enumerate(symbols)
+            }
+            tickers = symbols
+
+        # Aplicar paginación
+        paginated = tickers[offset : offset + limit]
+        current_offset = offset
+
+        if not paginated:
+            return {"total_assets": total, "current_offset": current_offset, "sectors": []}
+
+        df = yf.download(tickers=" ".join(paginated), period="5d", progress=False, auto_adjust=True)
 
         if not isinstance(df.columns, pd.MultiIndex):
             raise HTTPException(status_code=500, detail="Unexpected data format from Yahoo Finance")
@@ -206,7 +253,7 @@ def get_market_heatmap():
         close_df = df["Close"].copy()
         close_df.dropna(axis=1, thresh=2, inplace=True)
         if close_df.empty or close_df.shape[0] < 2 or close_df.shape[1] == 0:
-            raise HTTPException(status_code=500, detail="No valid price data available after cleaning")
+            return {"total_assets": total, "current_offset": current_offset, "sectors": []}
 
         last_row = close_df.iloc[-1]
         prev_row = close_df.iloc[-2]
@@ -224,13 +271,13 @@ def get_market_heatmap():
                 sectors[sector] = []
             sectors[sector].append({"ticker": ticker, "change_pct": change_pct})
 
-        result: list[dict] = []
+        result = []
         for sector, assets in sectors.items():
             assets.sort(key=lambda x: abs(x["change_pct"]), reverse=True)
             result.append({"sector": sector, "assets": assets[:15]})
 
         result.sort(key=lambda x: x["sector"])
-        return result
+        return {"total_assets": total, "current_offset": current_offset, "sectors": result}
 
     except HTTPException:
         raise

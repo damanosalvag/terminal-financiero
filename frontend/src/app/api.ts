@@ -165,8 +165,19 @@ export interface MarketHeatmapSector {
   assets: MarketHeatmapAsset[];
 }
 
-export async function getMarketHeatmap(): Promise<MarketHeatmapSector[]> {
-  const res = await fetch(`${API_BASE}/analysis/market-heatmap`);
+export interface MarketHeatmapResponse {
+  total_assets: number;
+  current_offset: number;
+  sectors: MarketHeatmapSector[];
+}
+
+export async function getMarketHeatmap(
+  market: string = "sp500",
+  offset: number = 0,
+  limit: number = 100
+): Promise<MarketHeatmapResponse> {
+  const params = new URLSearchParams({ market, offset: String(offset), limit: String(limit) });
+  const res = await fetch(`${API_BASE}/analysis/market-heatmap?${params}`);
   if (!res.ok) {
     const detail = await res.text().catch(() => "");
     throw new Error(`Error ${res.status} al obtener heatmap. ${detail}`);
