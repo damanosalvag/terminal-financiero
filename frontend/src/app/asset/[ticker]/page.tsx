@@ -184,8 +184,8 @@ export default function AssetCockpit() {
       setViewState("loading");
       try {
         const [chartRes, fundRes] = await Promise.all([
-          fetch(`/${API_BASE}/analysis/${ticker}/chart`),
-          fetch(`/${API_BASE}/analysis/${ticker}/fundamentals`),
+          fetch(`${API_BASE}/analysis/${ticker}/chart`),
+          fetch(`${API_BASE}/analysis/${ticker}/fundamentals`),
         ]);
         if (!chartRes.ok) {
           const detail = await chartRes.text().catch(() => "");
@@ -217,7 +217,7 @@ export default function AssetCockpit() {
     setIsNarrativeLoading(true);
     const fetchNarrative = async () => {
       try {
-        const res = await fetch(`/${API_BASE}/analysis/${ticker}/narrative`);
+        const res = await fetch(`${API_BASE}/analysis/${ticker}/narrative`);
         if (res.ok && !cancelled) {
           const json: NarrativeData = await res.json();
           setNarrative(json);

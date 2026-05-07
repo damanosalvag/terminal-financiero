@@ -135,7 +135,7 @@ export default function ScreenerPage() {
     off === 0 ? setScanning(true) : setLoadingMore(true);
     setError("");
     try {
-      const res = await fetch(`/${API_BASE}/screener/scan?offset=${off}&limit=30`, {
+      const res = await fetch(`${API_BASE}/screener/scan?offset=${off}&limit=30`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildPayload()),
