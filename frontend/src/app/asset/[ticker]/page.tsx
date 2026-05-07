@@ -217,7 +217,7 @@ export default function AssetCockpit() {
     setIsNarrativeLoading(true);
     const fetchNarrative = async () => {
       try {
-        const res = await fetch(`/api/analysis/${ticker}/narrative`);
+        const res = await fetch(`/${API_BASE}/analysis/${ticker}/narrative`);
         if (res.ok && !cancelled) {
           const json: NarrativeData = await res.json();
           setNarrative(json);
