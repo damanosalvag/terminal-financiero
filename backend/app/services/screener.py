@@ -203,9 +203,20 @@ def scan_market(filters: dict[str, Any], offset: int = 0, limit: int = 30) -> di
             return {"count": 0, "results": [], "total": 1, "offset": 0}
         if raw.empty:
             return {"count": 0, "results": [], "total": 1, "offset": 0}
-        # Para búsqueda por ticker individual el df no tiene MultiIndex
-        close_df = raw[["Close"]].rename(columns={"Close": ticker}) if "Close" in raw.columns else pd.DataFrame()
-        vol_df = raw[["Volume"]].rename(columns={"Volume": ticker}) if "Volume" in raw.columns else None
+
+        # yfinance siempre devuelve MultiIndex ahora, incluso con 1 ticker
+        if isinstance(raw.columns, pd.MultiIndex):
+            if "Close" not in raw.columns.get_level_values(0):
+                return {"count": 0, "results": [], "total": 1, "offset": 0}
+            close_df = raw["Close"].copy()
+            vol_df = raw["Volume"].copy() if "Volume" in raw.columns.get_level_values(0) else None
+        else:
+            # Fallback: columnas planas
+            if "Close" not in raw.columns:
+                return {"count": 0, "results": [], "total": 1, "offset": 0}
+            close_df = raw[["Close"]].rename(columns={"Close": ticker})
+            vol_df = raw[["Volume"]].rename(columns={"Volume": ticker}) if "Volume" in raw.columns else None
+
         if close_df.empty:
             return {"count": 0, "results": [], "total": 1, "offset": 0}
         tech = _compute_technicals(close_df, vol_df)
