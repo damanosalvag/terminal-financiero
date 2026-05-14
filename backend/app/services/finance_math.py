@@ -11,7 +11,9 @@ Principios:
 
 from datetime import datetime
 
+import numpy as np
 import pandas as pd
+from scipy.stats import norm
 
 
 def calculate_days_held(buy_date: datetime, current_date: datetime) -> int:
@@ -33,8 +35,10 @@ def calculate_days_held(buy_date: datetime, current_date: datetime) -> int:
     # la resta sea segura independientemente del origen de cada fecha.
     naive_buy = buy_date.replace(tzinfo=None)
     naive_current = current_date.replace(tzinfo=None)
-    delta = naive_current - naive_buy
-    return max(abs(delta.days), 1)
+    # Días calendario: diferencia entre fechas sin contar horas parciales.
+    # Si la compra fue ayer (cualquier hora) y hoy es otro día del calendario → 1 día.
+    calendar_days = (naive_current.date() - naive_buy.date()).days
+    return max(calendar_days, 1)
 
 
 def calculate_target_exit_price(
@@ -248,3 +252,126 @@ def calculate_historical_multiple_value(eps: float | None, target_pe: float = 15
     if eps is None or eps <= 0:
         return None
     return round(eps * target_pe, 2)
+
+
+def calculate_target_probability(
+    target_exit_price: float,
+    current_price: float,
+    target_mean_price: float | None,
+    days_held: int,
+    beta: float | None = None,
+    sigma: float | None = None,
+) -> float | None:
+    """
+    Calcula la probabilidad (0-100%) de que el precio alcance target_exit_price
+    usando un modelo híbrido: log-normal (Black-Scholes ATM) × penalización logística de analistas.
+
+    Market Probability — modelo log-normal:
+        mu = R_f + beta × (R_m − R_f)     # CAPM drift
+        Z  = [ln(P_T / P_C) − (mu − σ²/2) × t] / [σ × √t]
+        market_prob = 1 − Φ(Z)
+
+    Analyst Penalty — función logística:
+        k = 15 (agresividad)
+        penalty = 1 / (1 + e^{k × (P_T / P_A − 1)})
+
+    Final: total = market_prob × penalty
+
+    Args:
+        target_exit_price: Precio objetivo calculado por la app (P_T).
+        current_price: Precio actual del activo (P_C).
+        target_mean_price: Precio objetivo de analistas (P_A).
+        days_held: Días transcurridos (t = days / 365).
+        beta: Beta de la acción (default 1.0 si no disponible).
+        sigma: Volatilidad histórica anualizada (calculada de returns diarios × √252).
+    """
+    if target_mean_price is None or target_mean_price <= 0:
+        return None
+    if target_exit_price <= 0 or current_price <= 0:
+        return None
+
+    # Fix 2: el objetivo ya se alcanzó → probabilidad 100%
+    if current_price >= target_exit_price:
+        return 100.0
+
+    # Fix 1: forzar mínimo 1 día para evitar división por cero
+    safe_days: int = max(days_held, 1)
+
+    beta_val: float = beta if beta is not None and beta > 0 else 1.0
+    sigma_val: float = sigma if sigma is not None and sigma > 0 else 0.30
+
+    R_f: float = 0.042
+    R_m: float = 0.09
+    t_years: float = safe_days / 365.0
+
+    # ── 1. Drift (CAPM) ──────────────────────────────────────────
+    mu: float = R_f + beta_val * (R_m - R_f)
+
+    # ── 2. Market Probability (log-normal, derivado de Black-Scholes) ─
+    numerator: float = np.log(target_exit_price / current_price) - (mu - (sigma_val**2) / 2.0) * t_years
+    denominator: float = sigma_val * np.sqrt(t_years)
+    if denominator <= 0:
+        return None
+    z_score: float = numerator / denominator
+    market_probability: float = 1.0 - float(norm.cdf(z_score))
+
+    # Fix 3: Penalización de analistas con cliff en 0.98 (k=40)
+    # Solo penaliza fuerte cuando el target supera el 98% del consenso
+    penalty_factor: float = 1.0 / (1.0 + np.exp(40.0 * (target_exit_price / target_mean_price - 0.98)))
+
+    # ── 4. Final ──────────────────────────────────────────────────
+    total_probability: float = market_probability * penalty_factor
+    return round(max(0.0, min(100.0, total_probability * 100.0)), 1)
+
+
+def calculate_volatility_regime(
+    historical_close: list[float],
+) -> tuple[float, float | None]:
+    """
+    Calcula el régimen de volatilidad actual usando detección de anomalías.
+
+    Step 1: Umbral de anomalía = percentil 90 de los retornos absolutos diarios (1 año).
+    Step 2: Identificar los días donde |retorno| > umbral.
+    Step 3: Tomar los últimos 4 eventos anómalos.
+    Step 4: heartbeat_days = intervalo promedio entre esos eventos.
+    Step 5: sigma = volatilidad anualizada de los últimos (2 × heartbeat_days) días.
+
+    Fallbacks:
+      - < 2 anomalías → heartbeat = 21 días, sigma de 21 días.
+      - < 21 datos → sigma de todo el histórico disponible.
+
+    Args:
+        historical_close: Lista de precios de cierre diarios (~252 para 1 año).
+
+    Returns:
+        (heartbeat_days: float, sigma: float | None)
+    """
+    if len(historical_close) < 21:
+        return 21.0, None
+
+    returns: np.ndarray = np.abs(np.diff(historical_close) / historical_close[:-1])
+    anomaly_threshold: float = float(np.percentile(returns, 90))
+    if anomaly_threshold <= 0:
+        return 21.0, None
+
+    # Índices donde ocurrió una anomalía (día del retorno, 0-indexado en el array de returns)
+    anomaly_indices: list[int] = [i for i, r in enumerate(returns) if r > anomaly_threshold]
+
+    if len(anomaly_indices) < 2:
+        # Muy pocas anomalías: usar defaults
+        recent_std = float(np.std(returns[-21:])) if len(returns) >= 21 else float(np.std(returns))
+        sigma = recent_std * np.sqrt(252) if recent_std > 0 else None
+        return 21.0, sigma
+
+    # Últimos 4 eventos (o menos si hay < 4)
+    last_4_indices = anomaly_indices[-4:]
+    intervals: list[int] = [last_4_indices[i + 1] - last_4_indices[i] for i in range(len(last_4_indices) - 1)]
+    heartbeat_days: float = max(1.0, float(np.mean(intervals)) if intervals else 21.0)
+
+    # Sigma: volatilidad del período reciente (2 × heartbeat)
+    lookback = int(max(21, 2 * heartbeat_days))
+    window_returns = returns[-lookback:] if len(returns) >= lookback else returns
+    daily_std: float = float(np.std(window_returns))
+    sigma: float | None = daily_std * np.sqrt(252) if daily_std > 0 else None
+
+    return heartbeat_days, sigma

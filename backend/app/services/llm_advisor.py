@@ -107,7 +107,9 @@ _NEWS_INTEL_PROMPT = (
     "Devuelve UNICAMENTE un objeto JSON valido con esta estructura:\n"
     '{{"sentiment": "Bullish"|"Bearish"|"Neutral", '
     '"impact_summary": "2 frases cortas maximo describiendo el impacto tangible.", '
-    '"macro_driver": "2-3 palabras, ej: Supply Chain, Energy Costs, Rearmament"}}\n'
+    '"macro_driver": "2-3 palabras, ej: Cadena de Suministro, Costos Energéticos, Rearme"}}\n'
+    "IMPORTANTE: Los campos 'impact_summary' y 'macro_driver' deben estar SIEMPRE en español. "
+    "El campo 'sentiment' debe ser exactamente 'Bullish', 'Bearish' o 'Neutral' (en inglés, sin traducir).\n"
     "You MUST return your response in valid JSON format."
 )
 

@@ -8,7 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 import yfinance as yf
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -28,6 +28,8 @@ from app.services.finance_math import (
     calculate_days_held,
     calculate_rsi,
     calculate_target_exit_price,
+    calculate_target_probability,
+    calculate_volatility_regime,
 )
 try:
     from app.services.llm_advisor import analyze_portfolio_news
@@ -65,9 +67,48 @@ def _get_sector(ticker: str) -> str:
 def create_position(
     payload: PositionCreate,
     db: Session = Depends(get_db),
+    response: Response = None,  # type: ignore[assignment]
 ) -> PositionResponse:
-    """Crea una nueva posición en el portafolio."""
-    position = PortfolioPosition(**payload.model_dump())
+    """
+    Crea una nueva posición.
+    Si ya existe una posición activa con el mismo ticker, promedia el precio
+    de compra de forma ponderada por cantidad y acumula la posición existente.
+    El buy_date se mantiene como el más antiguo.
+    """
+    ticker_upper = payload.ticker.strip().upper()
+    existing = (
+        db.query(PortfolioPosition)
+        .filter(
+            PortfolioPosition.ticker == ticker_upper,
+            PortfolioPosition.is_active.is_(True),
+        )
+        .first()
+    )
+
+    if existing:
+        # Precio promedio ponderado por cantidad
+        total_qty = existing.quantity + payload.quantity
+        weighted_price = (
+            (existing.buy_price * existing.quantity + payload.buy_price * payload.quantity)
+            / total_qty
+        )
+        existing.buy_price = round(weighted_price, 6)
+        existing.quantity = total_qty
+        existing.commission = existing.commission + (payload.commission or 0.0)
+        # Actualizar parámetros financieros con los nuevos valores
+        existing.estimated_inflation = payload.estimated_inflation
+        existing.target_annual_yield = payload.target_annual_yield
+        # buy_date conserva el más antiguo (el existente)
+        db.commit()
+        db.refresh(existing)
+        if response is not None:
+            response.status_code = 200
+        return PositionResponse.model_validate(existing)
+
+    # Ticker nuevo: crear posición normalmente
+    data = payload.model_dump()
+    data["ticker"] = ticker_upper
+    position = PortfolioPosition(**data)
     db.add(position)
     db.commit()
     db.refresh(position)
@@ -160,6 +201,32 @@ def portfolio_summary(
         total_invested += invested
         total_current += current_value
 
+        # Probabilidad de alcanzar el precio objetivo (modelo híbrido log-normal + penalización analistas)
+        target_mean_price: float | None = None
+        beta_val: float | None = None
+        try:
+            import yfinance as yf_info
+            info = yf_info.Ticker(position.ticker).info
+            raw_target = info.get("targetMeanPrice")
+            target_mean_price = float(raw_target) if raw_target is not None else None
+            raw_beta = info.get("beta")
+            beta_val = float(raw_beta) if raw_beta is not None else None
+        except Exception:
+            pass
+
+        # Régimen de volatilidad: heartbeat + sigma dinámico basado en anomalías
+        heartbeat_days, sigma = calculate_volatility_regime(historical_close)
+        volatility_window: int = int(max(21, 2 * heartbeat_days))
+
+        target_probability = calculate_target_probability(
+            target_exit_price=target_exit,
+            current_price=current_price,
+            target_mean_price=target_mean_price,
+            days_held=heartbeat_days,
+            beta=beta_val,
+            sigma=sigma,
+        )
+
         analyzed.append(
             PositionAnalysisResponse(
                 id=position.id,
@@ -182,6 +249,9 @@ def portfolio_summary(
                 current_rsi=current_rsi,
                 sector=sector,
                 daily_change_pct=daily_change_pct,
+                target_probability=target_probability,
+                heartbeat_days=heartbeat_days,
+                volatility_window=volatility_window,
             )
         )
 

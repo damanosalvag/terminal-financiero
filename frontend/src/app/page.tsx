@@ -29,6 +29,7 @@ export default function Dashboard() {
   const [viewState, setViewState] = useState<ViewState>("loading");
   const [errorMessage, setErrorMessage] = useState("");
   const [summary, setSummary] = useState<PortfolioSummary | null>(null);
+  const [refreshing, setRefreshing] = useState(false);
   const [modalOpen, setModalOpen] = useState(false);
   const [closeTarget, setCloseTarget] = useState<PositionAnalysis | null>(null);
 
@@ -325,9 +326,22 @@ export default function Dashboard() {
           })()}
 
           <section>
-            <h2 className="mb-4 text-lg font-semibold text-foreground/80 font-mono">
-              Posiciones Activas
-            </h2>
+            <div className="mb-4 flex items-center justify-between">
+              <h2 className="text-lg font-semibold text-foreground/80 font-mono">
+                Posiciones Activas
+              </h2>
+              <button
+                onClick={async () => {
+                  setRefreshing(true);
+                  await fetchSummary();
+                  setRefreshing(false);
+                }}
+                disabled={refreshing}
+                className="rounded-md border border-border/50 px-3 py-1 text-[11px] font-mono text-foreground/40 hover:text-foreground/70 hover:border-accent/40 transition-colors disabled:opacity-30"
+              >
+                {refreshing ? "↻ Actualizando..." : "↻ Actualizar"}
+              </button>
+            </div>
 
             {s.positions.length === 0 ? (
               <div className="rounded-xl border border-border bg-surface px-6 py-12 text-center">
@@ -346,6 +360,8 @@ export default function Dashboard() {
                       <th className="px-4 py-3 text-right">Salida Obj.</th>
                       <th className="px-4 py-3 text-right">Utilidad</th>
                       <th className="px-4 py-3 text-center">RSI (14d)</th>
+                      <th className="px-4 py-3 text-center" title="Probabilidad de alcanzar el precio objetivo vs consenso de analistas">Prob.</th>
+                      <th className="px-4 py-3 text-center" title="Latido: intervalo promedio entre eventos anómalos de volatilidad. Horizonte: ventana usada para calcular sigma (riesgo actual).">Ritmo</th>
                       <th className="px-4 py-3 text-center">Acción</th>
                     </tr>
                   </thead>
@@ -386,6 +402,15 @@ export default function Dashboard() {
                           </td>
                           <td className="px-4 py-3 text-center">
                             <RSIBadge rsi={p.current_rsi} />
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <ProbabilityBadge prob={p.target_probability} />
+                          </td>
+                          <td className="px-4 py-3 text-center">
+                            <span className="text-[10px] font-mono text-foreground/40 leading-tight"
+                              title={`Latido: ${p.heartbeat_days ? p.heartbeat_days.toFixed(0) + 'd' : 'N/D'} · Horizonte: ${p.volatility_window}d · La sigma se calcula con los últimos ${p.volatility_window} días.`}>
+                              {p.heartbeat_days ? p.heartbeat_days.toFixed(0) + 'd' : '—'} · {p.volatility_window}d
+                            </span>
                           </td>
                           <td className="px-4 py-3 text-center">
                             <button
@@ -868,6 +893,24 @@ function TabButton({
     >
       {children}
     </button>
+  );
+}
+
+function ProbabilityBadge({ prob }: { prob: number | null }) {
+  if (prob === null || prob === undefined) {
+    return <span className="text-xs text-foreground/20 font-mono">—</span>;
+  }
+  const colorClass =
+    prob >= 70 ? "text-[var(--positive)] bg-[var(--positive)]/10 border-[var(--positive)]/30"
+    : prob >= 40 ? "text-accent bg-accent/10 border-accent/30"
+    : "text-[var(--negative)] bg-[var(--negative)]/10 border-[var(--negative)]/30";
+  return (
+    <span
+      className={`inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-bold font-mono ${colorClass}`}
+      title={`${prob.toFixed(1)}% de probabilidad de alcanzar el precio objetivo vs consenso de analistas Wall St.`}
+    >
+      {prob.toFixed(0)}%
+    </span>
   );
 }
 

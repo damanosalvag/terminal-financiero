@@ -1,5 +1,4 @@
 "use client";
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 import { useState } from "react";
 import Link from "next/link";
@@ -102,6 +101,14 @@ function toBackendValue(key: string, display: string): string {
 
 const selectClass = "w-full rounded-md border border-border/70 bg-surface px-2.5 py-1.5 text-[11px] font-mono text-foreground/80 focus:outline-none focus:border-accent/50 transition-colors appearance-none cursor-pointer";
 
+function screenerFetch(path: string, options?: RequestInit): Promise<Response> {
+  const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  const match = typeof document !== "undefined" ? document.cookie.match(/(?:^|;\s*)token=([^;]*)/) : null;
+  const headers: Record<string, string> = { ...(options?.headers as Record<string, string> || {}) };
+  if (match) headers["Authorization"] = `Bearer ${match[1]}`;
+  return fetch(`${base}${path}`, { ...options, headers });
+}
+
 export default function ScreenerPage() {
   const [filters, setFilters] = useState<Filters>(INITIAL_FILTERS);
   const [results, setResults] = useState<ScanResponse | null>(null);
@@ -135,7 +142,7 @@ export default function ScreenerPage() {
     off === 0 ? setScanning(true) : setLoadingMore(true);
     setError("");
     try {
-      const res = await fetch(`${API_BASE}/screener/scan?offset=${off}&limit=30`, {
+      const res = await screenerFetch(`/screener/scan?offset=${off}&limit=30`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(buildPayload()),

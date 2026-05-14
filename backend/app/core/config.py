@@ -13,6 +13,11 @@ class Settings(BaseSettings):
     DATABASE_URL: str
     PROJECT_NAME: str = "Terminal Financiero API"
     DEEPSEEK_API_KEY: str | None = None
+    AUTH_USERNAME: str = "admin"
+    AUTH_PASSWORD: str
+    JWT_SECRET: str
+    ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
+    COOKIE_SECURE: bool = False  # True en producción (HTTPS)
 
 
 settings = Settings()

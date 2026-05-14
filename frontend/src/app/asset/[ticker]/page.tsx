@@ -1,10 +1,21 @@
 "use client";
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { addWatchlistTicker, checkWatchlistTicker } from "@/app/api";
+
+// Helper autenticado que lee el token de la cookie
+function getAuthHeaders(): Record<string, string> {
+  if (typeof document === "undefined") return {};
+  const match = document.cookie.match(/(?:^|;\s*)token=([^;]*)/);
+  return match ? { Authorization: `Bearer ${match[1]}` } : {};
+}
+
+async function cockpitFetch(path: string): Promise<Response> {
+  const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+  return fetch(`${base}${path}`, { headers: getAuthHeaders() });
+}
 import {
   CandlestickSeries,
   ColorType,
@@ -184,8 +195,8 @@ export default function AssetCockpit() {
       setViewState("loading");
       try {
         const [chartRes, fundRes] = await Promise.all([
-          fetch(`${API_BASE}/analysis/${ticker}/chart`),
-          fetch(`${API_BASE}/analysis/${ticker}/fundamentals`),
+          cockpitFetch(`/analysis/${ticker}/chart`),
+          cockpitFetch(`/analysis/${ticker}/fundamentals`),
         ]);
         if (!chartRes.ok) {
           const detail = await chartRes.text().catch(() => "");
@@ -217,7 +228,7 @@ export default function AssetCockpit() {
     setIsNarrativeLoading(true);
     const fetchNarrative = async () => {
       try {
-        const res = await fetch(`${API_BASE}/analysis/${ticker}/narrative`);
+        const res = await cockpitFetch(`/analysis/${ticker}/narrative`);
         if (res.ok && !cancelled) {
           const json: NarrativeData = await res.json();
           setNarrative(json);

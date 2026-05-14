@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
+import LogoutButton from "@/components/LogoutButton";
 import "./globals.css";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
@@ -32,6 +33,8 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
                   {item.label}
                 </Link>
               ))}
+              <span className="mx-1 text-border">|</span>
+              <LogoutButton />
             </nav>
           </div>
         </header>

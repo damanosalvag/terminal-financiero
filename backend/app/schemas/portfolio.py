@@ -73,6 +73,9 @@ class PositionAnalysisResponse(PositionResponse):
     current_rsi: float | None = None
     sector: str = "Unknown"
     daily_change_pct: float | None = None
+    target_probability: float | None = None
+    heartbeat_days: float = 21.0
+    volatility_window: int = 21
 
 
 class PortfolioSummaryResponse(BaseModel):

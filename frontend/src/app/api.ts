@@ -1,5 +1,19 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+function getAuthHeaders(): Record<string, string> {
+  if (typeof document === "undefined") return {};
+  const match = document.cookie.match(/(?:^|;\s*)token=([^;]*)/);
+  if (match) return { Authorization: `Bearer ${match[1]}` };
+  return {};
+}
+
+async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
+  return fetch(`${API_BASE}${path}`, {
+    ...options,
+    headers: { ...getAuthHeaders(), ...options?.headers },
+  });
+}
+
 export interface PortfolioPosition {
   id: string;
   ticker: string;
@@ -24,6 +38,9 @@ export interface PositionAnalysis extends PortfolioPosition {
   current_rsi: number | null;
   sector: string;
   daily_change_pct: number | null;
+  target_probability: number | null;
+  heartbeat_days: number;
+  volatility_window: number;
 }
 
 export interface PortfolioSummary {
@@ -34,11 +51,8 @@ export interface PortfolioSummary {
 }
 
 export async function getPortfolioSummary(): Promise<PortfolioSummary> {
-  const res = await fetch(`${API_BASE}/portfolio/summary`);
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Error ${res.status} al obtener resumen. ${detail}`);
-  }
+  const res = await apiFetch("/portfolio/summary");
+  if (!res.ok) { const detail = await res.text().catch(() => ""); throw new Error(`Error ${res.status} al obtener resumen. ${detail}`); }
   return res.json();
 }
 
@@ -52,35 +66,23 @@ export interface PositionCreatePayload {
   target_annual_yield?: number;
 }
 
-export async function createPosition(
-  payload: PositionCreatePayload
-): Promise<PortfolioPosition> {
-  const res = await fetch(`${API_BASE}/portfolio/`, {
+export async function createPosition(payload: PositionCreatePayload): Promise<PortfolioPosition> {
+  const res = await apiFetch("/portfolio/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ...payload, currency: "USD" }),
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Error ${res.status} al crear posición. ${detail}`);
-  }
+  if (!res.ok) { const detail = await res.text().catch(() => ""); throw new Error(`Error ${res.status} al crear posición. ${detail}`); }
   return res.json();
 }
 
-export async function closePosition(
-  id: string,
-  exit_price: number,
-  exit_date: string
-): Promise<PortfolioPosition> {
-  const res = await fetch(`${API_BASE}/portfolio/${id}/close`, {
+export async function closePosition(id: string, exit_price: number, exit_date: string): Promise<PortfolioPosition> {
+  const res = await apiFetch(`/portfolio/${id}/close`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ exit_price, exit_date }),
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Error ${res.status} al cerrar posición. ${detail}`);
-  }
+  if (!res.ok) { const detail = await res.text().catch(() => ""); throw new Error(`Error ${res.status} al cerrar posición. ${detail}`); }
   return res.json();
 }
 
@@ -105,11 +107,8 @@ export interface PositionHistoryResponse {
 }
 
 export async function getPortfolioHistory(): Promise<PositionHistoryResponse> {
-  const res = await fetch(`${API_BASE}/portfolio/history`);
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Error ${res.status} al obtener historial. ${detail}`);
-  }
+  const res = await apiFetch("/portfolio/history");
+  if (!res.ok) { const detail = await res.text().catch(() => ""); throw new Error(`Error ${res.status} al obtener historial. ${detail}`); }
   return res.json();
 }
 
@@ -126,97 +125,52 @@ export interface WatchlistTicker {
 }
 
 export async function getWatchlist(): Promise<WatchlistTicker[]> {
-  const res = await fetch(`${API_BASE}/watchlist/`);
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Error ${res.status} al obtener watchlist. ${detail}`);
-  }
+  const res = await apiFetch("/watchlist/");
+  if (!res.ok) { const detail = await res.text().catch(() => ""); throw new Error(`Error ${res.status} al obtener watchlist. ${detail}`); }
   return res.json();
 }
 
-export async function addWatchlistTicker(
-  ticker: string,
-  importance_score?: number,
-  reason_note?: string
-): Promise<WatchlistTicker> {
-  const res = await fetch(`${API_BASE}/watchlist/`, {
+export async function addWatchlistTicker(ticker: string, importance_score?: number, reason_note?: string): Promise<WatchlistTicker> {
+  const res = await apiFetch("/watchlist/", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ ticker, importance_score: importance_score ?? 1, reason_note: reason_note ?? null }),
   });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Error ${res.status} al agregar ticker. ${detail}`);
-  }
+  if (!res.ok) { const detail = await res.text().catch(() => ""); throw new Error(`Error ${res.status} al agregar ticker. ${detail}`); }
   return res.json();
 }
 
 export async function checkWatchlistTicker(ticker: string): Promise<{ is_in_watchlist: boolean }> {
-  const res = await fetch(`${API_BASE}/watchlist/check/${ticker}`);
+  const res = await apiFetch(`/watchlist/check/${ticker}`);
   if (!res.ok) return { is_in_watchlist: false };
   return res.json();
 }
 
 export async function removeWatchlistTicker(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/watchlist/${id}`, {
-    method: "DELETE",
-  });
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Error ${res.status} al eliminar ticker. ${detail}`);
-  }
+  const res = await apiFetch(`/watchlist/${id}`, { method: "DELETE" });
+  if (!res.ok) { const detail = await res.text().catch(() => ""); throw new Error(`Error ${res.status} al eliminar ticker. ${detail}`); }
 }
 
-export interface MarketHeatmapAsset {
-  ticker: string;
-  change_pct: number;
-}
+export interface MarketHeatmapAsset { ticker: string; change_pct: number; }
+export interface MarketHeatmapSector { sector: string; assets: MarketHeatmapAsset[]; }
+export interface MarketHeatmapResponse { total_assets: number; current_offset: number; sectors: MarketHeatmapSector[]; }
 
-export interface MarketHeatmapSector {
-  sector: string;
-  assets: MarketHeatmapAsset[];
-}
-
-export interface MarketHeatmapResponse {
-  total_assets: number;
-  current_offset: number;
-  sectors: MarketHeatmapSector[];
-}
-
-export async function getMarketHeatmap(
-  market: string = "sp500",
-  offset: number = 0,
-  limit: number = 100
-): Promise<MarketHeatmapResponse> {
+export async function getMarketHeatmap(market = "sp500", offset = 0, limit = 100): Promise<MarketHeatmapResponse> {
   const params = new URLSearchParams({ market, offset: String(offset), limit: String(limit) });
-  const res = await fetch(`${API_BASE}/analysis/market-heatmap?${params}`);
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Error ${res.status} al obtener heatmap. ${detail}`);
-  }
+  const res = await apiFetch(`/analysis/market-heatmap?${params}`);
+  if (!res.ok) { const detail = await res.text().catch(() => ""); throw new Error(`Error ${res.status} al obtener heatmap. ${detail}`); }
   return res.json();
 }
 
 export interface PortfolioNewsItem {
   ticker: string;
-  llm_analysis: {
-    sentiment: string;
-    impact_summary: string;
-    macro_driver: string;
-  } | null;
+  llm_analysis: { sentiment: string; impact_summary: string; macro_driver: string } | null;
   news: { title: string | null; publisher: string | null; link: string | null }[];
 }
-
-export interface PortfolioNewsResponse {
-  count: number;
-  results: PortfolioNewsItem[];
-}
+export interface PortfolioNewsResponse { count: number; results: PortfolioNewsItem[]; }
 
 export async function getPortfolioNewsIntel(): Promise<PortfolioNewsResponse> {
-  const res = await fetch(`${API_BASE}/portfolio/news-intel`);
-  if (!res.ok) {
-    const detail = await res.text().catch(() => "");
-    throw new Error(`Error ${res.status} al obtener news intel. ${detail}`);
-  }
+  const res = await apiFetch("/portfolio/news-intel");
+  if (!res.ok) { const detail = await res.text().catch(() => ""); throw new Error(`Error ${res.status} al obtener news intel. ${detail}`); }
   return res.json();
 }
