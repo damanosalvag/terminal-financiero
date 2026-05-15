@@ -4,6 +4,7 @@ Orquesta las llamadas entre la base de datos, los servicios de matemática finan
 y el cliente de datos de mercado. La lógica de negocio vive en /services, no aquí.
 """
 
+import time
 import uuid
 from datetime import datetime, timezone
 
@@ -162,6 +163,9 @@ def portfolio_summary(
             current_rsi = calculate_rsi(historical_close)
         except ValueError:
             continue
+
+        # Throttle entre tickers para evitar rate limiting de Yahoo en servidores cloud
+        time.sleep(0.5)
 
         # Daily change: diferencia porcentual entre el último y penúltimo cierre
         daily_change_pct: float | None = None
@@ -499,7 +503,7 @@ def get_news_intel(db: Session = Depends(get_db)):
                 "news": [],
             }
 
-    with ThreadPoolExecutor(max_workers=4) as executor:
+    with ThreadPoolExecutor(max_workers=2) as executor:
         results = list(executor.map(analyze_one, unique_tickers))
 
     return {"count": len(results), "results": results}

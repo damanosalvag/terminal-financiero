@@ -120,7 +120,7 @@ def list_watchlist(db: Session = Depends(get_db)) -> list[WatchlistResponse]:
     if not entries:
         return []
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         responses = list(executor.map(_fetch_ticker_data, entries))
 
     return [r for r in responses if r is not None]

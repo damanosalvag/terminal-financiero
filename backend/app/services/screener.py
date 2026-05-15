@@ -79,7 +79,7 @@ def _fetch_fundamentals_batch(tickers: list[str]) -> dict[str, dict[str, Any]]:
         except Exception:
             return ticker, None
 
-    with ThreadPoolExecutor(max_workers=8) as executor:
+    with ThreadPoolExecutor(max_workers=3) as executor:
         for ticker, data in executor.map(fetch_one, tickers):
             if data is not None:
                 results[ticker] = data

@@ -9,6 +9,7 @@ Principios:
   - Indicadores técnicos (RSI) calculados con pandas rolling.
 """
 
+import gc
 from datetime import datetime
 
 import numpy as np
@@ -373,5 +374,9 @@ def calculate_volatility_regime(
     window_returns = returns[-lookback:] if len(returns) >= lookback else returns
     daily_std: float = float(np.std(window_returns))
     sigma: float | None = daily_std * np.sqrt(252) if daily_std > 0 else None
+
+    # Liberar memoria: los arrays de numpy dentro de esta función pueden acumularse
+    # en procesos long-running como el análisis de múltiples posiciones
+    gc.collect()
 
     return heartbeat_days, sigma
