@@ -6,6 +6,8 @@ Screener service — pipeline inteligente:
 """
 
 import logging
+import random
+import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any
 
@@ -31,7 +33,7 @@ _LOOKBACK = "1y"
 
 
 def _has_fundamental_filters(f: dict) -> bool:
-    return any(f.get(k) for k in ("pe_range", "ps_range", "market_cap_range", "beta_range", "sector"))
+    return any(f.get(k) for k in ("pe_range", "ps_range", "market_cap_range", "beta_range", "sector", "debt_to_equity_range"))
 
 
 def _has_technical_filters(f: dict) -> bool:
@@ -63,6 +65,7 @@ def _fetch_fundamentals_batch(tickers: list[str]) -> dict[str, dict[str, Any]]:
     results: dict[str, dict[str, Any]] = {}
 
     def fetch_one(ticker: str):
+        time.sleep(0.3 + random.uniform(0, 0.4))
         try:
             info = yf.Ticker(ticker).info
             return ticker, {
@@ -75,6 +78,7 @@ def _fetch_fundamentals_batch(tickers: list[str]) -> dict[str, dict[str, Any]]:
                 "price_to_sales": info.get("priceToSalesTrailing12Months"),
                 "target_mean_price": info.get("targetMeanPrice"),
                 "beta": info.get("beta"),
+                "debt_to_equity": info.get("debtToEquity"),
             }
         except Exception:
             return ticker, None
@@ -93,6 +97,7 @@ def _passes_fundamental_filters(fd: dict, f: dict) -> bool:
     mc = fd.get("market_cap")
     beta = fd.get("beta")
     sector = fd.get("sector", "")
+    de = fd.get("debt_to_equity")
 
     pr = f.get("pe_range")
     if pr == "< 15" and (pe is None or pe >= 15): return False
@@ -115,6 +120,11 @@ def _passes_fundamental_filters(fd: dict, f: dict) -> bool:
 
     sec = f.get("sector")
     if sec and sec not in ("Todos", "", None) and sector != sec: return False
+
+    de_range = f.get("debt_to_equity_range")
+    if de_range == "< 100" and (de is None or de >= 100): return False
+    if de_range == "100-200" and (de is None or not (100 <= de <= 200)): return False
+    if de_range == "> 200" and (de is None or de <= 200): return False
 
     return True
 
@@ -229,7 +239,8 @@ def scan_market(filters: dict[str, Any], offset: int = 0, limit: int = 30) -> di
                   "industry": fd.get("industry", ""), "market_cap": fd.get("market_cap"),
                   "avg_volume": fd.get("avg_volume"), "trailing_pe": fd.get("trailing_pe"),
                   "price_to_sales": fd.get("price_to_sales"),
-                  "target_mean_price": fd.get("target_mean_price"), "beta": fd.get("beta")}
+                  "target_mean_price": fd.get("target_mean_price"), "beta": fd.get("beta"),
+                  "debt_to_equity": fd.get("debt_to_equity")}
         return {"count": 1, "results": [result], "total": 1, "offset": 0}
 
     # ── Chunk del universo ────────────────────────────────────────────────────
@@ -260,7 +271,8 @@ def scan_market(filters: dict[str, Any], offset: int = 0, limit: int = 30) -> di
                              "sector": fd.get("sector", ""), "industry": fd.get("industry", ""),
                              "market_cap": fd.get("market_cap"), "avg_volume": fd.get("avg_volume"),
                              "trailing_pe": fd.get("trailing_pe"), "price_to_sales": fd.get("price_to_sales"),
-                             "target_mean_price": fd.get("target_mean_price"), "beta": fd.get("beta")})
+                             "target_mean_price": fd.get("target_mean_price"), "beta": fd.get("beta"),
+                             "debt_to_equity": fd.get("debt_to_equity")})
         results.sort(key=lambda x: x["rsi"] if x["rsi"] is not None else 100)
         return {"count": len(results), "results": results, "total": len(DEFAULT_UNIVERSE), "offset": offset}
 
@@ -298,7 +310,8 @@ def scan_market(filters: dict[str, Any], offset: int = 0, limit: int = 30) -> di
                              "sector": fd.get("sector", ""), "industry": fd.get("industry", ""),
                              "market_cap": fd.get("market_cap"), "avg_volume": fd.get("avg_volume"),
                              "trailing_pe": fd.get("trailing_pe"), "price_to_sales": fd.get("price_to_sales"),
-                             "target_mean_price": fd.get("target_mean_price"), "beta": fd.get("beta")})
+                             "target_mean_price": fd.get("target_mean_price"), "beta": fd.get("beta"),
+                             "debt_to_equity": fd.get("debt_to_equity")})
         results.sort(key=lambda x: x["rsi"] if x["rsi"] is not None else 100)
         return {"count": len(results), "results": results, "total": len(DEFAULT_UNIVERSE), "offset": offset}
 
@@ -326,6 +339,7 @@ def scan_market(filters: dict[str, Any], offset: int = 0, limit: int = 30) -> di
                          "sector": fd.get("sector", ""), "industry": fd.get("industry", ""),
                          "market_cap": fd.get("market_cap"), "avg_volume": fd.get("avg_volume"),
                          "trailing_pe": fd.get("trailing_pe"), "price_to_sales": fd.get("price_to_sales"),
-                         "target_mean_price": fd.get("target_mean_price"), "beta": fd.get("beta")})
+                         "target_mean_price": fd.get("target_mean_price"), "beta": fd.get("beta"),
+                         "debt_to_equity": fd.get("debt_to_equity")})
     results.sort(key=lambda x: x["rsi"] if x["rsi"] is not None else 100)
     return {"count": len(results), "results": results, "total": len(DEFAULT_UNIVERSE), "offset": offset}

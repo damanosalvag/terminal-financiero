@@ -7,11 +7,36 @@ Si se cambia de proveedor (ej. a Alpha Vantage), solo se modifica esta clase.
 """
 
 import logging
+import time as _time
 from datetime import datetime
 from typing import Any
+from urllib.parse import quote as _url_quote
 
 import pandas as pd
 import yfinance as yf
+
+from app.core.config import settings
+
+# ── Stealth Proxy para Yahoo Finance vía Cloudflare Worker ───────────
+# Intercepta requests HTTP a Yahoo y las redirige por el proxy.
+# Si el proxy falla o no está configurado, la request va directo a Yahoo.
+# NO afecta llamadas a otras APIs (Wikipedia, DeepSeek).
+_proxy_worker = (settings.CLOUDFLARE_WORKER_URL or "").strip()
+
+if _proxy_worker:
+    import requests as _requests
+
+    _original_send = _requests.Session.send
+
+    def _stealth_send(self, request, **kwargs):
+        try:
+            if "yahoo.com" in request.url:
+                request.url = f"{_proxy_worker}?url={_url_quote(request.url, safe='')}"
+        except Exception:
+            pass
+        return _original_send(self, request, **kwargs)
+
+    _requests.Session.send = _stealth_send
 
 logger = logging.getLogger(__name__)
 
@@ -22,22 +47,38 @@ class YahooFinanceClient:
     Si se cambia de proveedor (ej. a Alpha Vantage), solo se modifica esta clase.
     """
 
+    def __init__(self):
+        self._price_cache: dict[str, tuple[float, float]] = {}
+        self._cache_ttl = 120
+
     def _get_ticker(self, ticker: str) -> yf.Ticker:
         return yf.Ticker(ticker)
 
     def get_current_price(self, ticker: str) -> float:
         """
         Obtiene el último precio de cierre usando history(period='1d').
-        Con manejo defensivo de rate limiting y errores de red.
+        Con manejo defensivo de rate limiting, errores de red y soft cache 120s.
         """
+        if ticker in self._price_cache:
+            cached_price, cached_at = self._price_cache[ticker]
+            if _time.time() - cached_at < self._cache_ttl:
+                return cached_price
+
         try:
             df = self._get_ticker(ticker).history(period="1d")
             if df.empty:
                 raise ValueError(f"Ticker not found or data unavailable: '{ticker}'")
-            return float(df["Close"].iloc[-1])
+            price = float(df["Close"].iloc[-1])
+            self._price_cache[ticker] = (price, _time.time())
+            return price
         except ValueError:
             raise
         except Exception as exc:
+            if ticker in self._price_cache:
+                logger.warning(
+                    "Returning stale cached price for ticker=%s: fetch failed (%s)", ticker, exc
+                )
+                return self._price_cache[ticker][0]
             logger.warning("Market data fetch failed for ticker=%s: %s", ticker, exc)
             raise ValueError(
                 f"Ticker not found or data unavailable: '{ticker}'. Underlying error: {exc}"
@@ -83,14 +124,34 @@ class YahooFinanceClient:
                 f"Ticker not found or data unavailable: '{ticker}'. Underlying error: {exc}"
             ) from exc
 
-    def get_target_price(self, ticker: str) -> float | None:
-        """Obtiene targetMeanPrice de analistas."""
+    def get_target_price(self, ticker: str, current_price: float | None = None) -> float | None:
+        """
+        Obtiene targetMeanPrice de analistas.
+        Si falla, degrada a current_price * 1.10 como estimación conservadora.
+        """
         try:
             info = self._get_ticker(ticker).info
             target = info.get("targetMeanPrice")
             return float(target) if target is not None else None
         except Exception as exc:
             logger.warning("Target price failed for ticker=%s: %s", ticker, exc)
+            if current_price is not None and current_price > 0:
+                fallback = round(current_price * 1.10, 2)
+                logger.info(
+                    "Fallback target price for %s: %.2f (10%% premium over current)",
+                    ticker, fallback
+                )
+                return fallback
+            return None
+
+    def get_beta(self, ticker: str) -> float | None:
+        """Obtiene beta del ticker. Degrada a None si falla."""
+        try:
+            info = self._get_ticker(ticker).info
+            beta = info.get("beta")
+            return float(beta) if beta is not None else None
+        except Exception as exc:
+            logger.warning("Beta fetch failed for ticker=%s: %s", ticker, exc)
             return None
 
     def get_fundamentals(self, ticker: str) -> dict[str, Any]:
@@ -144,9 +205,7 @@ class YahooFinanceClient:
             }
         except Exception as exc:
             logger.warning("Fundamentals fetch failed for ticker=%s: %s", ticker, exc)
-            raise ValueError(
-                f"Ticker not found or data unavailable: '{ticker}'. Underlying error: {exc}"
-            ) from exc
+            return {}
 
     def get_dividends_since(self, ticker: str, start_date: datetime) -> float:
         """Suma de dividendos desde start_date."""

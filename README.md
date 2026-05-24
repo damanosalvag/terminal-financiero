@@ -1,113 +1,135 @@
 # Terminal Financiero
 
-Dashboard institucional de portafolio de inversión con análisis en tiempo real, métricas de interés compuesto y objetivo de utilidad anual (100% Efectivo Anual).
+Dashboard institucional de portafolio de inversión con análisis técnico, fundamental, IA estratégica y escáner de mercado.
 
 ## Arquitectura
 
 ```
 terminal-financiero/
-├── backend/                  # FastAPI + SQLAlchemy + Pandas
+├── backend/                          # FastAPI + SQLAlchemy + Pandas
 │   ├── app/
-│   │   ├── api/endpoints/    # Rutas HTTP (CRUD + análisis)
-│   │   ├── core/             # Configuración (DB, settings)
-│   │   ├── infrastructure/   # Clientes externos (Yahoo Finance)
-│   │   ├── models/           # Modelos SQLAlchemy
-│   │   ├── schemas/          # Validación Pydantic
-│   │   └── services/         # Lógica financiera pura
-│   ├── .env                  # DATABASE_URL (no commitear)
+│   │   ├── api/endpoints/            # Rutas HTTP
+│   │   │   ├── portfolio.py          # CRUD de posiciones + summary + news intel
+│   │   │   ├── watchlist.py          # Radar (CRUD + análisis en paralelo)
+│   │   │   ├── analysis.py           # Cockpit (chart, fundamentals, narrative, market-heatmap)
+│   │   │   ├── screener.py           # Scanner multi-filtro con paginación
+│   │   │   └── auth.py               # Login JWT con rate limiting
+│   │   ├── core/                     # Configuración
+│   │   │   ├── config.py             # Settings via .env (pydantic-settings)
+│   │   │   ├── database.py           # SQLAlchemy engine + session
+│   │   │   ├── security.py           # JWT create/verify (python-jose, 1 día)
+│   │   │   ├── rate_limit.py         # 5 intentos/15min por IP
+│   │   │   └── deps.py               # Dependencias FastAPI (legacy)
+│   │   ├── infrastructure/
+│   │   │   └── market_data.py        # YahooFinanceClient (yfinance wrapper)
+│   │   ├── models/                   # SQLAlchemy ORM
+│   │   │   ├── portfolio.py          # PortfolioPosition (UUID, 14 campos)
+│   │   │   └── watchlist.py          # WatchlistTicker + importance_score
+│   │   ├── schemas/                  # Pydantic validation
+│   │   │   ├── portfolio.py          # PositionCreate/Response/AnalysisResponse
+│   │   │   ├── watchlist.py          # WatchlistCreate/Response
+│   │   │   └── auth.py              # LoginRequest/TokenResponse
+│   │   └── services/                 # Lógica pura (sin DB)
+│   │       ├── finance_math.py       # Interés compuesto, RSI, Graham, DCF, probabilidad log-normal
+│   │       ├── technical_analysis.py # EMA, MACD, ADX, OBV, MFI, VWAP, Stochastic, Wyckoff
+│   │       ├── screener.py           # Batch scan con yfinance.download() vectorizado
+│   │       └── llm_advisor.py        # DeepSeek AI (noticias, narrativa)
+│   ├── .env                          # Variables de entorno (NO COMMITEAR)
 │   └── requirements.txt
-├── frontend/                 # Next.js 16 + Tailwind CSS v4
-│   └── src/app/
-│       ├── api.ts            # Cliente HTTP tipado
-│       ├── globals.css       # Tema oscuro profesional
-│       ├── layout.tsx
-│       └── page.tsx          # Dashboard principal
-└── .cursorrules              # Reglas de arquitectura para AI
+└── frontend/                         # Next.js 16 (App Router) + Tailwind CSS v4
+    ├── src/
+    │   ├── app/
+    │   │   ├── page.tsx              # Dashboard (4 tabs: Portafolio, Historial, Radar, Heatmap)
+    │   │   ├── layout.tsx            # Root layout + nav + autenticación
+    │   │   ├── api.ts               # Cliente HTTP con auth automática
+    │   │   ├── login/page.tsx       # Login JWT
+    │   │   ├── screener/page.tsx    # Scanner multi-filtro + tabla expandida
+    │   │   ├── globals.css          # Tema oscuro institucional (Tailwind v4)
+    │   │   └── asset/[ticker]/page.tsx  # Cockpit (chart + technical + fundamental + IA)
+    │   ├── components/
+    │   │   ├── NewPositionModal.tsx
+    │   │   ├── ClosePositionModal.tsx
+    │   │   ├── HealthRadarChart.tsx  # SVG nativo (sin recharts)
+    │   │   └── LogoutButton.tsx
+    │   └── middleware.ts             # Auth proxy (protege rutas)
+    └── package.json
 ```
-
-### Principios (Clean Architecture)
-
-- **Backend calcula, Frontend dibuja** — Sin lógica financiera en componentes React.
-- **Modularidad** — Cambiar de proveedor de datos (yfinance → Alpha Vantage) solo afecta la capa `infrastructure/`.
-- **Inyección de dependencias** — FastAPI `Depends()` para sesiones de DB; sin instancias directas en rutas.
-- **Tipado estricto** — Python type hints obligatorios, TypeScript sin `any`.
 
 ## Stack
 
-| Capa | Tecnología |
+| Capa | Tecnologías |
 |---|---|
-| Backend | Python 3.11+, FastAPI, SQLAlchemy 2.0, Pandas |
-| Frontend | Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS v4 |
+| Backend | Python 3.11+, FastAPI, SQLAlchemy 2.0, Pandas, NumPy, SciPy |
+| Frontend | Next.js 16, React 19, TypeScript, Tailwind CSS v4, Lightweight Charts |
 | Base de datos | PostgreSQL (Supabase) |
-| Datos de mercado | yfinance |
+| Datos mercado | yfinance (Yahoo Finance) |
+| IA | DeepSeek API (OpenAI-compatible) |
+| Auth | JWT (python-jose), cookies HttpOnly, rate limiting |
+| Deploy | Render (backend) + Vercel (frontend) |
 
 ## Instalación
 
 ### Backend
-
 ```bash
 cd backend
 python -m venv venv
-venv\Scripts\activate      # Windows
-source venv/bin/activate   # macOS/Linux
+venv\Scripts\activate        # Windows
 pip install -r requirements.txt
-
-# Configurar .env con tu DATABASE_URL de Supabase
-cp .env.example .env
-
-# Ejecutar
+# Configurar backend/.env con DATABASE_URL, AUTH_PASSWORD, JWT_SECRET
 uvicorn app.main:app --reload
 ```
 
-API disponible en `http://localhost:8000` · OpenAPI docs en `http://localhost:8000/docs`.
-
 ### Frontend
-
 ```bash
 cd frontend
 npm install
+# Configurar .env.local con NEXT_PUBLIC_API_URL=http://127.0.0.1:8000
 npm run dev
 ```
 
-Dashboard disponible en `http://localhost:3000`.
-
-## Endpoints
+## Endpoints API
 
 | Método | Ruta | Descripción |
 |---|---|---|
-| `POST` | `/portfolio/` | Crear posición |
-| `GET` | `/portfolio/` | Listar posiciones activas |
-| `GET` | `/portfolio/summary` | Resumen macro del portafolio |
-| `GET` | `/portfolio/{id}/analysis` | Análisis individual con métricas en tiempo real |
-| `PATCH` | `/portfolio/{id}/close` | Cerrar posición (registrar salida) |
+| `POST` | `/auth/login` | Login JWT (rate limited: 5/15min) |
+| `GET/POST` | `/portfolio/` | CRUD posiciones (POST promedia si ya existe) |
+| `GET` | `/portfolio/summary` | Resumen + análisis técnico + probabilidad |
+| `GET` | `/portfolio/history` | Historial cerradas + métricas avanzadas |
+| `GET` | `/portfolio/news-intel` | IA de noticias por posición |
+| `GET/POST/DELETE` | `/watchlist/` | Radar con análisis en paralelo |
+| `GET` | `/watchlist/check/{ticker}` | Verificar si está en watchlist |
+| `GET` | `/analysis/{ticker}/chart` | OHLCV + análisis técnico completo |
+| `GET` | `/analysis/{ticker}/fundamentals` | Ratios + valor intrínseco + checklist |
+| `GET` | `/analysis/{ticker}/narrative` | IA estratégica (DeepSeek) |
+| `GET` | `/analysis/market-heatmap` | Heatmap S&P 500 / Dow / Nasdaq / Russell |
+| `POST` | `/screener/scan` | Scanner multi-filtro con paginación |
 
-## Modelo de Datos — `PortfolioPosition`
+## Variables de entorno
 
-| Campo | Tipo | Descripción |
+### Backend (.env / Render)
+
+| Variable | Obligatorio | Descripción |
 |---|---|---|
-| `id` | UUID | Identificador único |
-| `ticker` | String(10) | Símbolo bursátil |
-| `quantity` | Float | Cantidad de títulos (acepta fracciones) |
-| `buy_price` | Float | Precio unitario de compra |
-| `currency` | String(3) | Código de moneda (USD, MXN, EUR) |
-| `buy_date` | DateTime | Fecha de adquisición |
-| `commission` | Float | Comisión total de la operación |
-| `estimated_inflation` | Float | Inflación anual estimada (%) |
-| `target_annual_yield` | Float | Objetivo de rentabilidad anual (%) |
-| `is_active` | Boolean | Posición activa en portafolio |
-| `exit_price` | Float | Precio de salida al cerrar |
-| `exit_date` | DateTime | Fecha de cierre |
+| `DATABASE_URL` | ✅ | PostgreSQL (Supabase) |
+| `AUTH_PASSWORD` | ✅ | Contraseña de login |
+| `JWT_SECRET` | ✅ | Clave de firma JWT (32+ chars) |
+| `AUTH_USERNAME` | No | Default: `admin` |
+| `ALLOWED_ORIGINS` | ✅ | `https://tu-app.vercel.app` |
+| `COOKIE_SECURE` | ✅ | `true` en producción |
+| `DEEPSEEK_API_KEY` | No | IA de noticias |
+| `MALLOC_ARENA_MAX` | Recomendado | `2` (optimiza RAM en Render) |
 
-## Fórmulas Financieras
+### Frontend (.env.local / Vercel)
 
-- **Interés compuesto diario**: `P_objetivo = costo_base × (1 + tasa_efectiva)^(días/365)`
-- **Tasa efectiva**: `(1 + rentabilidad_objetivo) × (1 + inflación) − 1`
-- **Utilidad real**: `valor_actual − costo_base − erosión_inflacionaria`
-- **Comisión prorrateada**: `costo_base/título = precio_compra + comisión/cantidad`
+| Variable | Obligatorio | Descripción |
+|---|---|---|
+| `NEXT_PUBLIC_API_URL` | ✅ | `https://terminal-financiero-api.onrender.com` |
 
 ## Convenciones
 
-- Código en **inglés**, comentarios y UI en **español**.
-- Nombres descriptivos: `precio_cierre_ajustado` en lugar de `pca`.
-- Estados asíncronos: siempre `loading`, `error`, `success`.
-- Componentes Smart (fetch datos) / Dumb (reciben props y renderizan).
+- Código en **inglés**, comentarios y UI en **español**
+- Backend calcula, Frontend dibuja — sin lógica financiera en React
+- Type hints obligatorios en Python, sin `any` en TypeScript
+- Manejo de estados `loading | error | success` en todas las vistas
+- Componentes Smart (fetch) / Dumb (reciben props)
+- Fórmulas financieras en `/services`, APIs externas en `/infrastructure`

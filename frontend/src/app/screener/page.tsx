@@ -21,6 +21,7 @@ interface ScreenerResult {
   target_mean_price: number | null;
   beta: number | null;
   rvol: number | null;
+  debt_to_equity: number | null;
 }
 interface ScanResponse {
   count: number;
@@ -42,6 +43,7 @@ interface Filters {
   daily_change: string;
   sector: string;
   volume_range: string;
+  debt_to_equity_range: string;
 }
 
 const INITIAL_FILTERS: Filters = {
@@ -57,6 +59,7 @@ const INITIAL_FILTERS: Filters = {
   daily_change: "",
   sector: "",
   volume_range: "",
+  debt_to_equity_range: "",
 };
 
 const SELECT_OPTIONS = {
@@ -79,6 +82,7 @@ const SELECT_OPTIONS = {
     "Consumer Defensive", "Energy", "Industrials", "Basic Materials",
     "Communication Services", "Real Estate", "Utilities",
   ],
+  debt_to_equity_range: ["< 100% (Baja)", "100%-200% (Moderada)", "> 200% (Alta)"],
 };
 
 // Map display labels to backend values
@@ -94,6 +98,11 @@ function toBackendValue(key: string, display: string): string {
       "< 1.5 (Moderado)": "< 1.5",
       "> 1.5 (Alto)": "> 1.5",
       "> 1 (Sobre Promedio)": "> 1",
+    },
+    debt_to_equity_range: {
+      "< 100% (Baja)": "< 100",
+      "100%-200% (Moderada)": "100-200",
+      "> 200% (Alta)": "> 200",
     },
   };
   return maps[key]?.[display] ?? display;
@@ -129,7 +138,7 @@ export default function ScreenerPage() {
 
     const dropdownKeys: (keyof Omit<Filters, "specific_ticker" | "rsi_operator" | "rsi_value">)[] = [
       "macd_signal", "ema_200", "pe_range", "ps_range",
-      "market_cap_range", "beta_range", "daily_change", "sector", "volume_range",
+      "market_cap_range", "beta_range", "debt_to_equity_range", "daily_change", "sector", "volume_range",
     ];
     for (const k of dropdownKeys) {
       const val = filters[k];
@@ -287,6 +296,20 @@ export default function ScreenerPage() {
             </select>
           </div>
 
+          {/* D/E (Debt to Equity) */}
+          <div>
+            <label className="block text-[9px] font-medium text-foreground/30 uppercase tracking-widest font-mono mb-1"
+                   title="Deuda Total / Patrimonio Neto. <100% = conservador.">
+              D/E
+            </label>
+            <select value={filters.debt_to_equity_range}
+                    onChange={e => setFilter("debt_to_equity_range", e.target.value)}
+                    className={selectClass}>
+              <option value="">Todos</option>
+              {SELECT_OPTIONS.debt_to_equity_range.map(o => <option key={o} value={o}>{o}</option>)}
+            </select>
+          </div>
+
           {/* Sector */}
           <div className="col-span-2">
             <label className="block text-[9px] font-medium text-foreground/30 uppercase tracking-widest font-mono mb-1">Sector</label>
@@ -338,6 +361,7 @@ export default function ScreenerPage() {
                     <th className="px-3 py-2 text-right">P/S</th>
                     <th className="px-3 py-2 text-right">Cap.</th>
                     <th className="px-3 py-2 text-right">Beta</th>
+                    <th className="px-3 py-2 text-right">D/E</th>
                     <th className="px-3 py-2 text-right">Target</th>
                   </tr>
                 </thead>
@@ -389,6 +413,12 @@ export default function ScreenerPage() {
                         <td className="px-3 py-2 text-right text-foreground/30 text-[10px]">{fmtCap(r.market_cap)}</td>
                         <td className={`px-3 py-2 text-right text-[10px] ${r.beta ? (r.beta > 1.5 ? "text-[var(--negative)]/60" : "text-foreground/40") : "text-foreground/20"}`}>
                           {r.beta?.toFixed(2) ?? "—"}
+                        </td>
+                        <td className={`px-3 py-2 text-right text-[10px] ${r.debt_to_equity == null ? "text-foreground/20"
+                          : r.debt_to_equity < 100 ? "text-[var(--positive)]/70"
+                          : r.debt_to_equity <= 200 ? "text-foreground/50"
+                          : "text-[var(--negative)]/70"}`}>
+                          {r.debt_to_equity != null ? `${r.debt_to_equity.toFixed(1)}%` : "—"}
                         </td>
                         <td className="px-3 py-2 text-right text-foreground/40">
                           {r.target_mean_price ? `$${r.target_mean_price.toFixed(0)}` : "—"}

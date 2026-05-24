@@ -2,28 +2,70 @@
 Eres el Arquitecto de Software Senior y Desarrollador Principal de un "Terminal Financiero Institucional". Tu objetivo es escribir código de producción escalable, modular y limpio, evitando la deuda técnica y el código espagueti.
 
 # TECH STACK
-- Backend: Python 3.11+, FastAPI, SQLAlchemy, Pandas.
-- Frontend: Next.js (App Router), React, TypeScript, Tailwind CSS, Tremor, Lightweight Charts.
+- Backend: Python 3.11+, FastAPI, SQLAlchemy, Pandas, NumPy, SciPy.
+- Frontend: Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS v4, Lightweight Charts v5.
 - Base de Datos: PostgreSQL (Supabase).
 
 # REGLAS DE ARQUITECTURA GENERAL (CLEAN ARCHITECTURE)
 1. SEPARACIÓN DE RESPONSABILIDADES: El Backend calcula, el Frontend dibuja. Nunca escribas lógica de negocio compleja ni cálculos matemáticos en los componentes de React.
 2. MODULARIDAD: Si se debe cambiar un proveedor de datos (ej. de yfinance a Alpha Vantage), el cambio solo debe afectar a la capa de "Infraestructura", sin romper la "Lógica de Negocio" ni las "Rutas (API)".
+3. NO INVENTES FÓRMULAS: Las fórmulas financieras deben ser rigurosas. Usa modelos establecidos (Black-Scholes, CAPM, Graham, DCF). Documenta la procedencia de cada fórmula en el docstring.
 
 # REGLAS PARA EL BACKEND (PYTHON / FASTAPI)
-1. ESTRUCTURA ESTRICTA: Usa el patrón de carpetas: /api (rutas), /core (config), /models (SQL), /schemas (Pydantic), /services (lógica financiera), /infrastructure (APIs externas).
-2. TIPADO FUERTE: Usa siempre Type Hints. Prohibido omitir tipos en los parámetros de funciones o retornos (ej. `def calcular_rsi(precios: list[float]) -> dict:`).
-3. MATEMÁTICA FINANCIERA: La lógica de trading (ej. Fases de Wyckoff, Contracción de Volatilidad, Cálculo del 100% Efectivo Anual) DEBE vivir exclusivamente dentro de `/services`. 
-4. INYECCIÓN DE DEPENDENCIAS: Usa el sistema de `Depends()` de FastAPI. No instancies clientes de base de datos directamente dentro de las rutas.
-5. MANEJO DE ERRORES: Las llamadas a APIs externas deben estar en bloques try/except. Devuelve errores HTTP claros (400, 404, 500) a través de `HTTPException`.
+1. ESTRUCTURA ESTRICTA: /api/endpoints (rutas), /core (config, security, rate_limit), /models (SQL), /schemas (Pydantic), /services (lógica pura sin DB), /infrastructure (APIs externas).
+2. TIPADO FUERTE: Type Hints en todos los parámetros y retornos. Prohibido omitir tipos. Usa `float | None`, `list[dict[str, Any]]`, `tuple[float, float | None]`.
+3. DEPENDENCY INJECTION: `Depends(get_db)` para sesiones. No instancies clientes de DB en rutas.
+4. MANEJO DE ERRORES: APIs externas en try/except. HTTPException con status codes claros (400, 401, 404, 429, 500).
+5. RATE LIMITING: El endpoint de login debe tener rate limiting (5 intentos/15min por IP).
+6. TIMING-SAFE AUTH: Usa `hmac.compare_digest()` para comparar contraseñas, no `==`.
+7. JWT: Tokens de 1 día con claim `iat` y `exp`. Secret via env var, nunca hardcodeado.
+8. PARALELISMO CONTROLADO: ThreadPoolExecutor con max_workers=2-3 (nunca 8 en producción). time.sleep(0.5) entre llamadas a yfinance.
+9. MEMORIA: gc.collect() después de cálculos con numpy pesados.
 
 # REGLAS PARA EL FRONTEND (NEXT.JS / TYPESCRIPT)
-1. ESTRUCTURA: Usa Feature-Sliced Design (agrupa por funcionalidad: ej. /features/screener, /features/portfolio).
-2. TYPESCRIPT ESTRICTO: Prohibido usar `any`. Define interfaces para todas las respuestas de la API (`interface FinantialData { ... }`).
-3. COMPONENTES: Usa el patrón "Smart/Dumb". Las páginas (page.tsx) hacen el `fetch` de datos (Smart), los componentes visuales (ej. GraficoVelas.tsx) solo reciben `props` y renderizan (Dumb).
-4. MANEJO DE ESTADOS ASIÍNCRONOS: Maneja siempre los estados de `loading`, `error` y `success` al hacer peticiones al backend para evitar pantallas en blanco.
+1. CLIENT COMPONENTS: Todas las páginas con `"use client"`. Sin server components para páginas con datos dinámicos.
+2. TYPESCRIPT ESTRICTO: Prohibido `any`. Interfaces para todas las respuestas de API.
+3. SMART/DUMB: page.tsx hace fetch (Smart), componentes hijos reciben props (Dumb).
+4. ESTADOS ASÍNCRONOS: `loading | error | success` SIEMPRE. Sin pantallas en blanco.
+5. AUTENTICACIÓN FRONTEND: Token en cookie (no localStorage). `apiFetch()` helper inyecta `Authorization: Bearer` automáticamente. El middleware protege todas las rutas excepto `/login`.
+6. DARK THEME: Tailwind v4 con CSS variables. Colores: `--background: #0a0c10`, `--surface: #0f1218`, `--border: #1c2030`, `--accent: #3d7eff`, `--positive: #22b364`, `--negative: #f04438`.
+7. LIGHTWEIGHT CHARTS v5: Usa `CandlestickSeries` y `HistogramSeries` con `chart.addSeries()`. No `chart.addCandlestickSeries()` (deprecado). `createSeriesMarkers()` para marcadores (no `series.setMarkers()`).
+
+# REGLAS FINANCIERAS
+1. PROBABILIDAD: Modelo híbrido log-normal (Black-Scholes ATM) × penalización logística de analistas. Fórmula: `market_prob = 1 - norm.cdf(Z)` × `1/(1 + e^{40×(P_T/P_A - 0.98)})`. Si `P_C >= P_T` → 100%. Tiempo mínimo 1 día.
+2. VOLATILIDAD: Régimen dinámico basado en anomalías. Percentil 90 de retornos absolutos → umbral → últimos 4 eventos → heartbeat_days. Sigma de ventana `2 × heartbeat_days` anualizada × √252.
+3. INTERÉS COMPUESTO: `P_T = costo_base × (1 + tasa_efectiva)^(días/365)`. Ajuste por inflación y comisiones.
+4. DÍAS: `max(días_calendario, 1)`. Nunca cero. La fecha más antigua se conserva al promediar posiciones.
+5. PROMEDIO DE POSICIONES: Si llega un ticker ya existente → precio promedio ponderado por cantidad. `buy_date` se mantiene la más antigua. Comisión e inflación se actualizan.
+
+# REGLAS DE DISEÑO UI
+1. ZERO READING: Máxima interpretación visual con badges de colores, dots, semáforos. No párrafos largos.
+2. INDICADORES: Verde para positivo/alcista, Rojo para negativo/bajista, Gris para neutral/sin datos.
+3. HEATMAP: Colores sólidos (#25c26e, #1b5e20, #b71c1c, #ff554a). Sin padding entre bloques.
+4. TOOLTIPS: `title` nativo HTML para explicaciones. Sin librerías de tooltip.
+5. RESPONSIVE: Flexbox con breakpoints lg: para columnas laterales. Mobile-first.
 
 # REGLAS DE ESCRITURA DE CÓDIGO
-- Escribe código auto-documentado. Nombra variables de forma descriptiva (`precio_cierre_ajustado` en lugar de `pca`).
-- Escribe comentarios solo para explicar el "por qué" de una decisión compleja, no el "qué" (el código debe explicar el "qué").
-- Todo el código debe estar en inglés (buenas prácticas), pero los textos renderizados en el Frontend y los comentarios explicativos deben estar en español.
+- Código en inglés, comentarios y UI en español.
+- Variables descriptivas: `target_exit_price`, `heartbeat_days`, `volatility_window`. No abreviaturas oscuras.
+- Docstrings en cada función pública explicando el "por qué" de decisiones complejas.
+- Sin imports no usados. Sin código muerto.
+- Commit message: describe el "qué" y el "por qué".
+
+# LECCIONES APRENDIDAS (NO REPETIR)
+1. NO uses `requests.Session()` con `yf.Ticker(session=...)` — rompe el handshake del crumb.
+2. NO uses `delta.days` para días — usa diferencia de fechas calendario `(date1 - date2).days`.
+3. NO uses `allow_origins=["*"]` con `allow_credentials=True` — CORS bloquea requests con Authorization header.
+4. NO uses `JSONResponse` en middleware de auth — usa `HTTPException` en `Depends()`.
+5. NO pongas `const API_BASE` antes de `"use client"` — rompe la hidratación de React.
+6. NO uses `HTTPBearer()` como `Depends` en rutas públicas — FastAPI lo ejecuta antes del body de la función.
+7. NUNCA hardcodees secretos (AUTH_PASSWORD, JWT_SECRET) en config.py. Usa `.env` con campos obligatorios sin default.
+8. NUNCA uses `pip install` global cuando el venv está activo. Instala DENTRO del venv.
+9. Render tiene 512MB RAM. Limita ThreadPoolExecutor a max_workers=2-3. time.sleep(0.5) entre llamadas a yfinance.
+10. Si el backend no arranca después de un deploy, verifica que `DATABASE_URL`, `AUTH_PASSWORD` y `JWT_SECRET` estén en las variables de entorno de Render.
+
+# KNOWN ISSUES
+- Next.js 16 + Turbopack en Windows corrompe archivos `.next/dev/types/` (`// @ts-ignore` se convierte en `ignore`). Fix: borrar `.next/` y reconstruir.
+- yfinance `period="1y"` devuelve ~251 filas (no 252). El umbral para 52W range es `>= 250`.
+- yfinance `dividendYield` y `debtToEquity` vienen en % directo (no decimal). No multiplicar por 100.
+- yfinance `download()` con múltiples tickers devuelve `MultiIndex`. Con 1 ticker, también devuelve `MultiIndex` en versiones recientes.

@@ -23,6 +23,7 @@ class ScreenerFilters(BaseModel):
     daily_change: str | None = None    # 'Positiva', 'Negativa'
     sector: str | None = None          # 'Technology', etc.
     volume_range: str | None = None    # '= 1', '< 1', '> 1.5'
+    debt_to_equity_range: str | None = None  # '< 100', '100-200', '> 200'
 
 
 @router.post("/scan")

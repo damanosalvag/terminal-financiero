@@ -5,9 +5,11 @@ por ticker (contiene precio, target y sector). Se añade get_historical_prices
 solo para el RSI, también en paralelo.
 """
 
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
+import random
 import yfinance as yf
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
@@ -28,6 +30,7 @@ def _fetch_ticker_data(entry: WatchlistTicker) -> WatchlistResponse | None:
       1. yf.Ticker(t).info → precio actual + target (una sola sesión HTTP)
       2. history(period='1y') → cierres para RSI
     """
+    time.sleep(0.3 + random.uniform(0, 0.4))
     try:
         t = yf.Ticker(entry.ticker)
         info = t.info

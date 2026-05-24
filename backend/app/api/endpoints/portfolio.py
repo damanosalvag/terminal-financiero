@@ -8,6 +8,9 @@ import time
 import uuid
 from datetime import datetime, timezone
 
+import random
+from concurrent.futures import ThreadPoolExecutor
+
 import yfinance as yf
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
@@ -36,9 +39,6 @@ try:
     from app.services.llm_advisor import analyze_portfolio_news
 except ImportError:
     analyze_portfolio_news = None  # type: ignore[assignment]
-
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
 
 router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
 
@@ -164,8 +164,8 @@ def portfolio_summary(
         except ValueError:
             continue
 
-        # Throttle entre tickers para evitar rate limiting de Yahoo en servidores cloud
-        time.sleep(0.5)
+        # Throttle con jitter entre tickers para evitar rate limiting de Yahoo en servidores cloud
+        time.sleep(0.5 + random.uniform(0, 0.5))
 
         # Daily change: diferencia porcentual entre el último y penúltimo cierre
         daily_change_pct: float | None = None
@@ -206,17 +206,10 @@ def portfolio_summary(
         total_current += current_value
 
         # Probabilidad de alcanzar el precio objetivo (modelo híbrido log-normal + penalización analistas)
-        target_mean_price: float | None = None
-        beta_val: float | None = None
-        try:
-            import yfinance as yf_info
-            info = yf_info.Ticker(position.ticker).info
-            raw_target = info.get("targetMeanPrice")
-            target_mean_price = float(raw_target) if raw_target is not None else None
-            raw_beta = info.get("beta")
-            beta_val = float(raw_beta) if raw_beta is not None else None
-        except Exception:
-            pass
+        target_mean_price = market_client.get_target_price(
+            position.ticker, current_price=current_price
+        )
+        beta_val = market_client.get_beta(position.ticker)
 
         # Régimen de volatilidad: heartbeat + sigma dinámico basado en anomalías
         heartbeat_days, sigma = calculate_volatility_regime(historical_close)

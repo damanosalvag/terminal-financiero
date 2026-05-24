@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     JWT_SECRET: str
     ALLOWED_ORIGINS: str = "http://localhost:3000,http://127.0.0.1:3000"
     COOKIE_SECURE: bool = False  # True en producción (HTTPS)
+    CLOUDFLARE_WORKER_URL: str = "https://yahoo-stealth-proxy.damanosalvag.workers.dev/"
 
 
 settings = Settings()
