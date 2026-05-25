@@ -7,7 +7,7 @@ export default function LogoutButton() {
 
   const handleLogout = () => {
     document.cookie = "token=; path=/; max-age=0";
-    router.push("/login");
+    window.location.href = "/login";
   };
 
   return (

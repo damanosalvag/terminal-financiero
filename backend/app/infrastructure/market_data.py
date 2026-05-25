@@ -154,6 +154,38 @@ class YahooFinanceClient:
             logger.warning("Beta fetch failed for ticker=%s: %s", ticker, exc)
             return None
 
+    def get_info_batch(self, ticker: str, current_price: float | None = None) -> dict[str, Any]:
+        """
+        Obtiene sector, target_mean_price y beta en UNA sola llamada a ticker.info.
+        Reemplaza las 3 llamadas separadas (_get_sector, get_target_price, get_beta)
+        que cada una creaba un Ticker nuevo y hacía su propia request HTTP a .info.
+
+        Degradación elegante:
+        - sector: "Unknown" si falla (sin cachear el fallo)
+        - target_mean_price: current_price * 1.10 si current_price está disponible
+        - beta: None si falla
+        """
+        try:
+            info = self._get_ticker(ticker).info
+            raw_target = info.get("targetMeanPrice")
+            raw_beta = info.get("beta")
+            return {
+                "sector": info.get("sector") or "Unknown",
+                "target_mean_price": float(raw_target) if raw_target is not None else None,
+                "beta": float(raw_beta) if raw_beta is not None else None,
+            }
+        except Exception as exc:
+            logger.warning("Info batch failed for ticker=%s: %s", ticker, exc)
+            fallback_target: float | None = None
+            if current_price is not None and current_price > 0:
+                fallback_target = round(current_price * 1.10, 2)
+                logger.info("Fallback target for %s: %.2f (10%% premium)", ticker, fallback_target)
+            return {
+                "sector": "Unknown",
+                "target_mean_price": fallback_target,
+                "beta": None,
+            }
+
     def get_fundamentals(self, ticker: str) -> dict[str, Any]:
         """Obtiene ratios fundamentales desde Yahoo Finance."""
         try:

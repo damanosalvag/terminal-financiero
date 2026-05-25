@@ -29,8 +29,8 @@ export default function LoginPage() {
         throw new Error(`Credenciales inválidas (${res.status})`);
       }
       const data: TokenResponse = await res.json();
-      document.cookie = `token=${data.access_token}; path=/; max-age=86400; SameSite=Lax`;
-      router.push("/");
+      document.cookie = `token=${data.access_token}; path=/; max-age=86400`;
+      window.location.href = "/";
     } catch (err: unknown) {
       if (err instanceof TypeError) {
         setError("No se puede conectar al servidor. ¿Está corriendo el backend?");

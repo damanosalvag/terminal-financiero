@@ -29,11 +29,15 @@ def _fetch_ticker_data(entry: WatchlistTicker) -> WatchlistResponse | None:
     Consolida las 3 llamadas anteriores en 2:
       1. yf.Ticker(t).info → precio actual + target (una sola sesión HTTP)
       2. history(period='1y') → cierres para RSI
+    El throttle se aplica DESPUÉS de .info para que los workers del ThreadPoolExecutor
+    disparen sus requests inmediatamente en paralelo, y solo duerman antes de la segunda call.
     """
-    time.sleep(0.3 + random.uniform(0, 0.4))
     try:
         t = yf.Ticker(entry.ticker)
         info = t.info
+        # Throttle tras la primera call: espaciar la segunda request (history)
+        # sin bloquear el inicio paralelo de otros workers.
+        time.sleep(0.3 + random.uniform(0, 0.4))
 
         # Precio actual — prefiere regularMarketPrice, cae en currentPrice
         current_price: float | None = None

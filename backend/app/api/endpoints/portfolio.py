@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 import random
 from concurrent.futures import ThreadPoolExecutor
 
-import yfinance as yf
 from fastapi import APIRouter, Depends, HTTPException, Response
 from sqlalchemy.orm import Session
 
@@ -46,22 +45,9 @@ router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
 # Si se cambia de proveedor, solo se reemplaza esta línea.
 market_client = YahooFinanceClient()
 
-# Caché de sectores en memoria (los sectores rara vez cambian)
+# Caché de sectores exitosos en memoria (los sectores rara vez cambian).
+# Solo se cachean éxitos — los fallos NO se cachean para permitir reintentos.
 _sector_cache: dict[str, str] = {}
-
-
-def _get_sector(ticker: str) -> str:
-    """Obtiene el sector de un ticker con caché en memoria."""
-    if ticker in _sector_cache:
-        return _sector_cache[ticker]
-    try:
-        info = yf.Ticker(ticker).info
-        sector = info.get("sector", "Unknown")
-        _sector_cache[ticker] = sector
-        return sector
-    except Exception:
-        _sector_cache[ticker] = "Unknown"
-        return "Unknown"
 
 
 @router.post("/", response_model=PositionResponse, status_code=201)
@@ -153,7 +139,12 @@ def portfolio_summary(
     total_current = 0.0
     now = datetime.now(timezone.utc)
 
-    for position in positions:
+    for i, position in enumerate(positions):
+        # Throttle con jitter entre tickers: se salta el primero para no añadir
+        # latencia innecesaria al inicio de la carga del portafolio.
+        if i > 0:
+            time.sleep(0.5 + random.uniform(0, 0.5))
+
         try:
             current_price = market_client.get_current_price(position.ticker)
             dividends_per_share = market_client.get_dividends_since(
@@ -164,9 +155,6 @@ def portfolio_summary(
         except ValueError:
             continue
 
-        # Throttle con jitter entre tickers para evitar rate limiting de Yahoo en servidores cloud
-        time.sleep(0.5 + random.uniform(0, 0.5))
-
         # Daily change: diferencia porcentual entre el último y penúltimo cierre
         daily_change_pct: float | None = None
         if historical_close and len(historical_close) >= 2:
@@ -175,8 +163,15 @@ def portfolio_summary(
             if prev > 0:
                 daily_change_pct = round(((last - prev) / prev) * 100, 2)
 
-        # Sector con caché
-        sector = _get_sector(position.ticker)
+        # Una sola llamada a .info obtiene sector, target y beta.
+        # get_info_batch() usa caché de sector exitoso y degrada elegantemente.
+        ticker_info = market_client.get_info_batch(position.ticker, current_price=current_price)
+        sector = ticker_info["sector"]
+        # Cachear solo sectores válidos (no "Unknown") para evitar contaminación de caché
+        if sector and sector != "Unknown":
+            _sector_cache[position.ticker] = sector
+        elif position.ticker in _sector_cache:
+            sector = _sector_cache[position.ticker]
 
         commission_per_share = position.commission / position.quantity
         days_held = calculate_days_held(position.buy_date, now)
@@ -206,10 +201,8 @@ def portfolio_summary(
         total_current += current_value
 
         # Probabilidad de alcanzar el precio objetivo (modelo híbrido log-normal + penalización analistas)
-        target_mean_price = market_client.get_target_price(
-            position.ticker, current_price=current_price
-        )
-        beta_val = market_client.get_beta(position.ticker)
+        target_mean_price: float | None = ticker_info["target_mean_price"]
+        beta_val: float | None = ticker_info["beta"]
 
         # Régimen de volatilidad: heartbeat + sigma dinámico basado en anomalías
         heartbeat_days, sigma = calculate_volatility_regime(historical_close)
