@@ -4,9 +4,19 @@ Programación defensiva: toda llamada externa está envuelta en try/except.
 Las excepciones nativas de yfinance nunca burbujean hacia la capa de aplicación.
 
 Si se cambia de proveedor (ej. a Alpha Vantage), solo se modifica esta clase.
+
+ARQUITECTURA:
+- `YahooFinanceClient` es una clase singleton (vía `market_client` al final del módulo).
+- Caches a nivel de instancia (que al ser singleton, son efectivamente process-global):
+    * _price_cache:    TTL 120s — precio intradía vivo
+    * _info_cache:     TTL 6h    — sector/target/beta (cambian raramente)
+    * _ohlcv_cache:    TTL 600s  — series históricas (1y / 6mo)
+    * _dividends_cache:TTL 6h    — dividendos por (ticker, start_date)
+- Lock `threading.Lock()` para acceso seguro desde ThreadPoolExecutor.
 """
 
 import logging
+import threading
 import time as _time
 from datetime import datetime
 from typing import Any
@@ -44,56 +54,93 @@ logger = logging.getLogger(__name__)
 class YahooFinanceClient:
     """
     Cliente para Yahoo Finance que aísla la dependencia externa.
-    Si se cambia de proveedor (ej. a Alpha Vantage), solo se modifica esta clase.
+    Pensado para ser usado como singleton (instancia única en `market_client`).
+    Comparte caches entre todos los endpoints.
     """
 
-    def __init__(self):
+    # TTLs en segundos
+    _PRICE_TTL: int = 120        # precio vivo: 2 minutos
+    _INFO_TTL: int = 6 * 3600    # sector/target/beta: 6 horas
+    _OHLCV_TTL: int = 600        # series históricas: 10 minutos
+    _DIVIDENDS_TTL: int = 6 * 3600  # dividendos: 6 horas
+
+    def __init__(self) -> None:
         self._price_cache: dict[str, tuple[float, float]] = {}
-        self._cache_ttl = 120
+        self._info_cache: dict[str, tuple[dict[str, Any], float]] = {}
+        self._ohlcv_cache: dict[tuple[str, str], tuple[list[float], float]] = {}
+        self._dividends_cache: dict[tuple[str, str], tuple[float, float]] = {}
+        self._lock = threading.Lock()
 
     def _get_ticker(self, ticker: str) -> yf.Ticker:
         return yf.Ticker(ticker)
 
+    # ── Precio intradía ─────────────────────────────────────────────
     def get_current_price(self, ticker: str) -> float:
         """
         Obtiene el último precio de cierre usando history(period='1d').
-        Con manejo defensivo de rate limiting, errores de red y soft cache 120s.
+        Soft cache 120s. Fallback a caché expirado si la API falla (mejor stale que crash).
         """
-        if ticker in self._price_cache:
-            cached_price, cached_at = self._price_cache[ticker]
-            if _time.time() - cached_at < self._cache_ttl:
-                return cached_price
+        with self._lock:
+            cached = self._price_cache.get(ticker)
+        if cached is not None and _time.time() - cached[1] < self._PRICE_TTL:
+            return cached[0]
 
         try:
             df = self._get_ticker(ticker).history(period="1d")
             if df.empty:
                 raise ValueError(f"Ticker not found or data unavailable: '{ticker}'")
             price = float(df["Close"].iloc[-1])
-            self._price_cache[ticker] = (price, _time.time())
+            with self._lock:
+                self._price_cache[ticker] = (price, _time.time())
             return price
         except ValueError:
             raise
         except Exception as exc:
-            if ticker in self._price_cache:
+            if cached is not None:
                 logger.warning(
                     "Returning stale cached price for ticker=%s: fetch failed (%s)", ticker, exc
                 )
-                return self._price_cache[ticker][0]
+                return cached[0]
             logger.warning("Market data fetch failed for ticker=%s: %s", ticker, exc)
             raise ValueError(
                 f"Ticker not found or data unavailable: '{ticker}'. Underlying error: {exc}"
             ) from exc
 
+    def prime_price(self, ticker: str, price: float) -> None:
+        """
+        Inyecta un precio en el cache (sin hacer request). Útil después de un
+        batch download para evitar que el siguiente get_current_price() haga otra
+        llamada redundante.
+        """
+        with self._lock:
+            self._price_cache[ticker] = (price, _time.time())
+
+    # ── Series históricas ───────────────────────────────────────────
     def get_historical_prices(self, ticker: str, period: str = "1y") -> list[float]:
-        """Obtiene precios de cierre históricos para indicadores técnicos."""
+        """Obtiene precios de cierre históricos para indicadores técnicos. Cache 10min."""
+        key = (ticker, period)
+        with self._lock:
+            cached = self._ohlcv_cache.get(key)
+        if cached is not None and _time.time() - cached[1] < self._OHLCV_TTL:
+            return cached[0]
+
         try:
             df = self._get_ticker(ticker).history(period=period)
             if df.empty or "Close" not in df.columns:
                 raise ValueError(f"Ticker not found or data unavailable: '{ticker}'")
-            return [float(v) for v in df["Close"].tolist()]
+            closes = [float(v) for v in df["Close"].tolist()]
+            with self._lock:
+                self._ohlcv_cache[key] = (closes, _time.time())
+            return closes
         except ValueError:
             raise
         except Exception as exc:
+            if cached is not None:
+                logger.warning(
+                    "Returning stale cached history for ticker=%s period=%s (fetch failed: %s)",
+                    ticker, period, exc,
+                )
+                return cached[0]
             logger.warning("Historical prices failed for ticker=%s: %s", ticker, exc)
             raise ValueError(
                 f"Ticker not found or data unavailable: '{ticker}'. Underlying error: {exc}"
@@ -124,58 +171,141 @@ class YahooFinanceClient:
                 f"Ticker not found or data unavailable: '{ticker}'. Underlying error: {exc}"
             ) from exc
 
-    def get_target_price(self, ticker: str, current_price: float | None = None) -> float | None:
+    # ── Batch OHLCV (la gran optimización del portfolio_summary) ────
+    def download_batch_history(
+        self, tickers: list[str], period: str = "1y"
+    ) -> dict[str, list[float]]:
         """
-        Obtiene targetMeanPrice de analistas.
-        Si falla, degrada a current_price * 1.10 como estimación conservadora.
+        Descarga history(period=...) de N tickers en UNA sola request batch.
+        Reemplaza N llamadas individuales por 1 sola — patrón ya usado en heatmap/screener.
+
+        Retorna {ticker: list[float] de cierres diarios}.
+        Cachea cada serie individual también en _ohlcv_cache para hits subsecuentes.
+
+        Para tickers que ya estén frescos en cache, los devuelve sin descargar.
+        Solo descarga los que falten o estén expirados.
         """
-        try:
-            info = self._get_ticker(ticker).info
-            target = info.get("targetMeanPrice")
-            return float(target) if target is not None else None
-        except Exception as exc:
-            logger.warning("Target price failed for ticker=%s: %s", ticker, exc)
-            if current_price is not None and current_price > 0:
-                fallback = round(current_price * 1.10, 2)
-                logger.info(
-                    "Fallback target price for %s: %.2f (10%% premium over current)",
-                    ticker, fallback
-                )
-                return fallback
-            return None
+        if not tickers:
+            return {}
 
-    def get_beta(self, ticker: str) -> float | None:
-        """Obtiene beta del ticker. Degrada a None si falla."""
-        try:
-            info = self._get_ticker(ticker).info
-            beta = info.get("beta")
-            return float(beta) if beta is not None else None
-        except Exception as exc:
-            logger.warning("Beta fetch failed for ticker=%s: %s", ticker, exc)
-            return None
+        # Separar tickers cacheados frescos de los que requieren descarga
+        now = _time.time()
+        cached_fresh: dict[str, list[float]] = {}
+        to_fetch: list[str] = []
+        with self._lock:
+            for t in tickers:
+                entry = self._ohlcv_cache.get((t, period))
+                if entry is not None and now - entry[1] < self._OHLCV_TTL:
+                    cached_fresh[t] = entry[0]
+                else:
+                    to_fetch.append(t)
 
+        # Si todos están cacheados, no hacemos request
+        if not to_fetch:
+            return cached_fresh
+
+        result: dict[str, list[float]] = dict(cached_fresh)
+        try:
+            # yf.download con espacios separa tickers. group_by='ticker' simplifica el acceso.
+            raw = yf.download(
+                tickers=" ".join(to_fetch),
+                period=period,
+                progress=False,
+                auto_adjust=True,
+                threads=False,  # threads=True causa rate-limit más agresivo en Render
+                group_by="ticker" if len(to_fetch) > 1 else "column",
+            )
+            if raw is None or raw.empty:
+                logger.warning("Batch download returned empty for tickers=%s", to_fetch)
+                return result
+
+            # Caso multi-ticker: MultiIndex columns (ticker, field)
+            if isinstance(raw.columns, pd.MultiIndex):
+                for t in to_fetch:
+                    if t not in raw.columns.get_level_values(0):
+                        continue
+                    try:
+                        series = raw[t]["Close"].dropna()
+                        if not series.empty:
+                            closes = [float(v) for v in series.tolist()]
+                            result[t] = closes
+                            with self._lock:
+                                self._ohlcv_cache[(t, period)] = (closes, now)
+                    except Exception as inner_exc:
+                        logger.debug("Could not extract %s from batch: %s", t, inner_exc)
+            else:
+                # Caso single-ticker: columnas planas
+                if "Close" in raw.columns and to_fetch:
+                    series = raw["Close"].dropna()
+                    if not series.empty:
+                        closes = [float(v) for v in series.tolist()]
+                        t = to_fetch[0]
+                        result[t] = closes
+                        with self._lock:
+                            self._ohlcv_cache[(t, period)] = (closes, now)
+        except Exception as exc:
+            logger.warning("Batch history download failed: %s", exc)
+            # Para los tickers que NO se pudieron descargar pero tienen caché expirado,
+            # devolver el stale en vez de nada.
+            with self._lock:
+                for t in to_fetch:
+                    if t not in result:
+                        stale = self._ohlcv_cache.get((t, period))
+                        if stale is not None:
+                            result[t] = stale[0]
+
+        return result
+
+    # ── Info batch (sector + target + beta) ─────────────────────────
     def get_info_batch(self, ticker: str, current_price: float | None = None) -> dict[str, Any]:
         """
         Obtiene sector, target_mean_price y beta en UNA sola llamada a ticker.info.
-        Reemplaza las 3 llamadas separadas (_get_sector, get_target_price, get_beta)
-        que cada una creaba un Ticker nuevo y hacía su propia request HTTP a .info.
+        Cache TTL 6h (estos campos cambian raramente).
 
         Degradación elegante:
-        - sector: "Unknown" si falla (sin cachear el fallo)
+        - sector: "Unknown" si falla (no se cachea fallo)
         - target_mean_price: current_price * 1.10 si current_price está disponible
         - beta: None si falla
         """
+        with self._lock:
+            cached = self._info_cache.get(ticker)
+        if cached is not None and _time.time() - cached[1] < self._INFO_TTL:
+            # Si el target cacheado quedó como None y ahora tenemos current_price,
+            # podemos usar el fallback sin invalidar el resto del cache.
+            entry = cached[0]
+            if entry.get("target_mean_price") is None and current_price is not None and current_price > 0:
+                return {
+                    **entry,
+                    "target_mean_price": round(current_price * 1.10, 2),
+                }
+            return entry
+
         try:
             info = self._get_ticker(ticker).info
             raw_target = info.get("targetMeanPrice")
             raw_beta = info.get("beta")
-            return {
+            result = {
                 "sector": info.get("sector") or "Unknown",
                 "target_mean_price": float(raw_target) if raw_target is not None else None,
                 "beta": float(raw_beta) if raw_beta is not None else None,
             }
+            # Solo cachear si obtuvimos un sector válido (evita poisoning con "Unknown")
+            if result["sector"] != "Unknown":
+                with self._lock:
+                    self._info_cache[ticker] = (result, _time.time())
+            # Aplicar fallback de target si quedó None
+            if result["target_mean_price"] is None and current_price is not None and current_price > 0:
+                result["target_mean_price"] = round(current_price * 1.10, 2)
+            return result
         except Exception as exc:
             logger.warning("Info batch failed for ticker=%s: %s", ticker, exc)
+            # Si hay stale en cache, devolverlo
+            if cached is not None:
+                stale = cached[0]
+                logger.info("Returning stale info_batch for %s", ticker)
+                if stale.get("target_mean_price") is None and current_price is not None and current_price > 0:
+                    return {**stale, "target_mean_price": round(current_price * 1.10, 2)}
+                return stale
             fallback_target: float | None = None
             if current_price is not None and current_price > 0:
                 fallback_target = round(current_price * 1.10, 2)
@@ -186,8 +316,9 @@ class YahooFinanceClient:
                 "beta": None,
             }
 
+    # ── Fundamentals completos (para asset cockpit) ─────────────────
     def get_fundamentals(self, ticker: str) -> dict[str, Any]:
-        """Obtiene ratios fundamentales desde Yahoo Finance."""
+        """Obtiene ratios fundamentales completos desde Yahoo Finance."""
         try:
             t = self._get_ticker(ticker)
             info = t.info
@@ -215,6 +346,21 @@ class YahooFinanceClient:
             except Exception:
                 pass
 
+            # Oportunisticamente, poblar también _info_cache (mismo .info)
+            sector_raw = info.get("sector") or "Unknown"
+            if sector_raw != "Unknown":
+                raw_target = info.get("targetMeanPrice")
+                raw_beta = info.get("beta")
+                with self._lock:
+                    self._info_cache[ticker] = (
+                        {
+                            "sector": sector_raw,
+                            "target_mean_price": float(raw_target) if raw_target is not None else None,
+                            "beta": float(raw_beta) if raw_beta is not None else None,
+                        },
+                        _time.time(),
+                    )
+
             return {
                 "trailing_pe": _safe_float("trailingPE"),
                 "price_to_sales": _safe_float("priceToSalesTrailing12Months"),
@@ -228,7 +374,7 @@ class YahooFinanceClient:
                 "earnings_timestamp": _safe_float("earningsTimestamp"),
                 "revenue_growth": _safe_float("revenueGrowth"),
                 "earnings_growth": _safe_float("earningsGrowth"),
-                "sector": info.get("sector", "Unknown"),
+                "sector": sector_raw,
                 "target_mean_price": _safe_float("targetMeanPrice"),
                 "target_median_price": _safe_float("targetMedianPrice"),
                 "analyst_opinions": _safe_float("numberOfAnalystOpinions"),
@@ -239,12 +385,21 @@ class YahooFinanceClient:
             logger.warning("Fundamentals fetch failed for ticker=%s: %s", ticker, exc)
             return {}
 
+    # ── Dividendos ──────────────────────────────────────────────────
     def get_dividends_since(self, ticker: str, start_date: datetime) -> float:
-        """Suma de dividendos desde start_date."""
+        """Suma de dividendos desde start_date. Cache 6h (los dividendos pasados son inmutables)."""
+        key = (ticker, start_date.isoformat())
+        with self._lock:
+            cached = self._dividends_cache.get(key)
+        if cached is not None and _time.time() - cached[1] < self._DIVIDENDS_TTL:
+            return cached[0]
+
         try:
             t = self._get_ticker(ticker)
             dividends = t.dividends
             if dividends is None or dividends.empty:
+                with self._lock:
+                    self._dividends_cache[key] = (0.0, _time.time())
                 return 0.0
             start_ts = pd.Timestamp(start_date)
             if dividends.index.tz is not None:
@@ -253,11 +408,17 @@ class YahooFinanceClient:
                 else:
                     start_ts = start_ts.tz_convert(dividends.index.tz)
             filtered = dividends[dividends.index >= start_ts]
-            return round(float(filtered.sum()), 4) if not filtered.empty else 0.0
+            total = round(float(filtered.sum()), 4) if not filtered.empty else 0.0
+            with self._lock:
+                self._dividends_cache[key] = (total, _time.time())
+            return total
         except Exception as exc:
             logger.warning("Dividends fetch failed for ticker=%s: %s", ticker, exc)
+            if cached is not None:
+                return cached[0]
             return 0.0
 
+    # ── Noticias ────────────────────────────────────────────────────
     def get_recent_news(self, ticker: str) -> list[dict[str, str | None]]:
         """Últimas noticias desde Yahoo Finance."""
         try:
@@ -275,3 +436,8 @@ class YahooFinanceClient:
         except Exception as exc:
             logger.warning("News fetch failed for ticker=%s: %s", ticker, exc)
             return []
+
+
+# ── Singleton compartido ─────────────────────────────────────────────
+# Una sola instancia para todo el proceso. Endpoints comparten todos los caches.
+market_client = YahooFinanceClient()

@@ -3,19 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
-import { addWatchlistTicker, checkWatchlistTicker } from "@/app/api";
+import { addWatchlistTicker, apiFetch, checkWatchlistTicker } from "@/app/api";
 
-// Helper autenticado que lee el token de la cookie
-function getAuthHeaders(): Record<string, string> {
-  if (typeof document === "undefined") return {};
-  const match = document.cookie.match(/(?:^|;\s*)token=([^;]*)/);
-  return match ? { Authorization: `Bearer ${match[1]}` } : {};
-}
-
-async function cockpitFetch(path: string): Promise<Response> {
-  const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-  return fetch(`${base}${path}`, { headers: getAuthHeaders() });
-}
+// Helper autenticado unificado con el resto de la app — usa apiFetch del módulo central.
+const cockpitFetch = apiFetch;
 import {
   CandlestickSeries,
   ColorType,

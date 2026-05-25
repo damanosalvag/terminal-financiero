@@ -7,7 +7,7 @@ function getAuthHeaders(): Record<string, string> {
   return {};
 }
 
-async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
+export async function apiFetch(path: string, options?: RequestInit): Promise<Response> {
   return fetch(`${API_BASE}${path}`, {
     ...options,
     headers: { ...getAuthHeaders(), ...options?.headers },
@@ -50,8 +50,9 @@ export interface PortfolioSummary {
   positions: PositionAnalysis[];
 }
 
-export async function getPortfolioSummary(): Promise<PortfolioSummary> {
-  const res = await apiFetch("/portfolio/summary");
+export async function getPortfolioSummary(force = false): Promise<PortfolioSummary> {
+  const qs = force ? "?force=true" : "";
+  const res = await apiFetch(`/portfolio/summary${qs}`);
   if (!res.ok) { const detail = await res.text().catch(() => ""); throw new Error(`Error ${res.status} al obtener resumen. ${detail}`); }
   return res.json();
 }
@@ -124,8 +125,9 @@ export interface WatchlistTicker {
   reason_note: string | null;
 }
 
-export async function getWatchlist(): Promise<WatchlistTicker[]> {
-  const res = await apiFetch("/watchlist/");
+export async function getWatchlist(force = false): Promise<WatchlistTicker[]> {
+  const qs = force ? "?force=true" : "";
+  const res = await apiFetch(`/watchlist/${qs}`);
   if (!res.ok) { const detail = await res.text().catch(() => ""); throw new Error(`Error ${res.status} al obtener watchlist. ${detail}`); }
   return res.json();
 }

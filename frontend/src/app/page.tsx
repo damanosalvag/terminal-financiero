@@ -53,12 +53,17 @@ export default function Dashboard() {
   const [newsIntel, setNewsIntel] = useState<PortfolioNewsResponse | null>(null);
   const [newsIntelLoading, setNewsIntelLoading] = useState(false);
 
-  const fetchSummary = useCallback(async () => {
+  const fetchSummary = useCallback(async (force = false) => {
     setViewState("loading");
     try {
-      const data = await getPortfolioSummary();
+      const data = await getPortfolioSummary(force);
       setSummary(data);
       setViewState("success");
+      // Si es un refresh forzado, invalidar también el news-intel para que se vuelva
+      // a calcular con las posiciones actualizadas.
+      if (force) {
+        setNewsIntel(null);
+      }
     } catch (err) {
       setErrorMessage(err instanceof Error ? err.message : "Error desconocido");
       setViewState("error");
@@ -78,11 +83,11 @@ export default function Dashboard() {
     }
   }, []);
 
-  const fetchWatchlist = useCallback(async () => {
+  const fetchWatchlist = useCallback(async (force = false) => {
     setWatchlistView("loading");
     setWatchlistError("");
     try {
-      const data = await getWatchlist();
+      const data = await getWatchlist(force);
       setWatchlist(data);
       setWatchlistView("success");
     } catch (err) {
@@ -188,7 +193,7 @@ export default function Dashboard() {
           </div>
           <p className="text-negative font-mono text-sm">{errorMessage}</p>
           <button
-            onClick={fetchSummary}
+            onClick={() => fetchSummary()}
             className="rounded-lg bg-surface px-5 py-2 text-sm font-medium text-foreground border border-border hover:bg-border/50 transition-colors"
           >
             Reintentar
@@ -333,11 +338,14 @@ export default function Dashboard() {
               <button
                 onClick={async () => {
                   setRefreshing(true);
-                  await fetchSummary();
+                  // force=true bypasea el response-cache para garantizar precios frescos
+                  // cuando el usuario solicita explícitamente una actualización.
+                  await fetchSummary(true);
                   setRefreshing(false);
                 }}
                 disabled={refreshing}
                 className="rounded-md border border-border/50 px-3 py-1 text-[11px] font-mono text-foreground/40 hover:text-foreground/70 hover:border-accent/40 transition-colors disabled:opacity-30"
+                title="Refresca precios bypaseando el cache (datos en vivo)"
               >
                 {refreshing ? "↻ Actualizando..." : "↻ Actualizar"}
               </button>
@@ -666,7 +674,7 @@ export default function Dashboard() {
             <div className="rounded-xl border border-border bg-surface px-6 py-8 text-center space-y-3">
               <p className="text-negative font-mono text-sm">{watchlistError}</p>
               <button
-                onClick={fetchWatchlist}
+                onClick={() => fetchWatchlist()}
                 className="rounded-lg bg-surface px-4 py-1.5 text-xs font-medium text-foreground border border-border hover:bg-border/50 transition-colors"
               >
                 Reintentar

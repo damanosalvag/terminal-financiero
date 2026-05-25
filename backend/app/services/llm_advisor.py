@@ -11,6 +11,37 @@ from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
+# Singleton del cliente OpenAI/DeepSeek.
+# Reutiliza la conexión HTTP entre llamadas (ahorra TLS handshake en cada request).
+# Se inicializa lazy: la primera llamada lo crea, las siguientes lo reusan.
+_openai_client: Any = None
+
+
+def _get_openai_client() -> Any:
+    """
+    Devuelve el cliente OpenAI singleton apuntado a DeepSeek.
+    Retorna None si falta la API key o el paquete openai.
+    """
+    global _openai_client
+    if _openai_client is not None:
+        return _openai_client
+
+    api_key = settings.DEEPSEEK_API_KEY
+    if not api_key:
+        return None
+
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return None
+
+    _openai_client = OpenAI(
+        api_key=api_key,
+        base_url="https://api.deepseek.com/v1",
+        timeout=25.0,  # Render request timeout ~30s; dejamos margen
+    )
+    return _openai_client
+
 _NARRATIVE_PROMPT = (
     "Eres un analista financiero institucional senior especializado en swing trading.\n\n"
     "Analiza el ticker {ticker} y las siguientes noticias recientes:\n\n"
@@ -51,14 +82,9 @@ def get_strategic_intel(ticker: str, news: list[dict[str, str | None]]) -> dict[
     Raises:
         ValueError: Si falta la API key, openai no está instalado, o DeepSeek falla.
     """
-    api_key = settings.DEEPSEEK_API_KEY
-    if not api_key:
-        raise ValueError("DEEPSEEK_API_KEY is missing in settings.")
-
-    try:
-        from openai import OpenAI
-    except ImportError:
-        raise ValueError("openai package missing. Install with: pip install openai")
+    client = _get_openai_client()
+    if client is None:
+        raise ValueError("DEEPSEEK_API_KEY missing or openai package not installed.")
 
     news_lines = []
     for i, n in enumerate(news[:5], 1):
@@ -69,7 +95,6 @@ def get_strategic_intel(ticker: str, news: list[dict[str, str | None]]) -> dict[
     prompt = _NARRATIVE_PROMPT.format(ticker=ticker, news_summary=news_summary)
 
     try:
-        client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],
@@ -122,13 +147,8 @@ def analyze_portfolio_news(ticker: str, news_items: list[dict[str, str | None]])
     Returns:
         Dict con sentiment, impact_summary, macro_driver. None si no hay API key.
     """
-    api_key = settings.DEEPSEEK_API_KEY
-    if not api_key:
-        return None
-
-    try:
-        from openai import OpenAI
-    except ImportError:
+    client = _get_openai_client()
+    if client is None:
         return None
 
     news_lines = []
@@ -140,7 +160,6 @@ def analyze_portfolio_news(ticker: str, news_items: list[dict[str, str | None]])
     prompt = _NEWS_INTEL_PROMPT.format(ticker=ticker, news_summary=news_summary)
 
     try:
-        client = OpenAI(api_key=api_key, base_url="https://api.deepseek.com/v1")
         response = client.chat.completions.create(
             model="deepseek-chat",
             messages=[{"role": "user", "content": prompt}],

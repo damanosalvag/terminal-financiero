@@ -1,71 +1,54 @@
 """
 Rutas del módulo de Watchlist / Radar.
-Fetch paralelo con ThreadPoolExecutor — una sola llamada a yf.Ticker(t).info
-por ticker (contiene precio, target y sector). Se añade get_historical_prices
-solo para el RSI, también en paralelo.
+Fetch paralelo con ThreadPoolExecutor usando el singleton market_client,
+que comparte caches (precio 120s, info 6h, history 10min) con el endpoint de portafolio.
+Si un ticker ya fue consultado por /portfolio/summary dentro de los TTLs,
+las requests a Yahoo se evitan completamente.
 """
 
-import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 
-import random
-import yfinance as yf
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.infrastructure.market_data import YahooFinanceClient
+from app.core.response_cache import cached_response, invalidate_endpoint
+from app.infrastructure.market_data import market_client
 from app.models.watchlist import WatchlistTicker
 from app.schemas.watchlist import WatchlistCreate, WatchlistResponse
 from app.services.finance_math import calculate_rsi
 
 router = APIRouter(prefix="/watchlist", tags=["Watchlist"])
-market_client = YahooFinanceClient()
 
 
 def _fetch_ticker_data(entry: WatchlistTicker) -> WatchlistResponse | None:
     """
-    Consolida las 3 llamadas anteriores en 2:
-      1. yf.Ticker(t).info → precio actual + target (una sola sesión HTTP)
-      2. history(period='1y') → cierres para RSI
-    El throttle se aplica DESPUÉS de .info para que los workers del ThreadPoolExecutor
-    disparen sus requests inmediatamente en paralelo, y solo duerman antes de la segunda call.
+    Usa el singleton market_client para que el watchlist comparta caches con portfolio:
+      - get_current_price (cache 120s)
+      - get_info_batch    (cache 6h — sector/target/beta)
+      - get_historical_prices para RSI (cache 10min)
+
+    Si el mismo ticker ya fue consultado por el portfolio dentro del TTL, esta llamada
+    no genera ninguna request HTTP a Yahoo.
     """
     try:
-        t = yf.Ticker(entry.ticker)
-        info = t.info
-        # Throttle tras la primera call: espaciar la segunda request (history)
-        # sin bloquear el inicio paralelo de otros workers.
-        time.sleep(0.3 + random.uniform(0, 0.4))
-
-        # Precio actual — prefiere regularMarketPrice, cae en currentPrice
-        current_price: float | None = None
-        raw_price = info.get("regularMarketPrice") or info.get("currentPrice")
-        if raw_price is not None:
-            current_price = float(raw_price)
-
-        # Si info no trae precio, intentar con history de 1 día
-        if current_price is None:
-            hist_day = t.history(period="1d")
-            if not hist_day.empty:
-                current_price = float(hist_day["Close"].iloc[-1])
-
-        if current_price is None:
+        # 1) Precio actual — usa cache 120s
+        try:
+            current_price = market_client.get_current_price(entry.ticker)
+        except ValueError:
             return None
 
-        # Target price (mismo info object, sin llamada extra)
-        target_price: float | None = None
-        raw_target = info.get("targetMeanPrice")
-        if raw_target is not None:
-            target_price = float(raw_target)
+        # 2) Info batch — target_mean_price + sector + beta (cache 6h)
+        info_batch = market_client.get_info_batch(entry.ticker, current_price=current_price)
+        target_price: float | None = info_batch.get("target_mean_price")
 
-        # RSI a 1 año — segunda y única llamada de red separada
-        hist = t.history(period="1y")
-        current_rsi: float | None = None
-        if not hist.empty:
-            closing_prices = [float(v) for v in hist["Close"].tolist()]
-            current_rsi = calculate_rsi(closing_prices)
+        # 3) Historical 1y para RSI (cache 10min)
+        try:
+            closing_prices = market_client.get_historical_prices(entry.ticker, period="1y")
+            current_rsi: float | None = calculate_rsi(closing_prices) if closing_prices else None
+        except ValueError:
+            current_rsi = None
 
         margin_of_safety: float | None = None
         if target_price is not None and current_price > 0:
@@ -100,6 +83,7 @@ def add_watchlist_ticker(payload: WatchlistCreate, db: Session = Depends(get_db)
     db.add(entry)
     db.commit()
     db.refresh(entry)
+    invalidate_endpoint("watchlist")
     return WatchlistResponse.model_validate(entry)
 
 
@@ -110,14 +94,21 @@ def remove_watchlist_ticker(watchlist_id: uuid.UUID, db: Session = Depends(get_d
         raise HTTPException(status_code=404, detail=f"Watchlist ticker not found: {watchlist_id}")
     db.delete(entry)
     db.commit()
+    invalidate_endpoint("watchlist")
 
 
 @router.get("/", response_model=list[WatchlistResponse])
-def list_watchlist(db: Session = Depends(get_db)) -> list[WatchlistResponse]:
+@cached_response(open_ttl=30, closed_ttl=300)
+def list_watchlist(
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> list[WatchlistResponse]:
     """
     Devuelve todos los tickers del radar en paralelo.
-    Cada ticker hace 2 llamadas HTTP en lugar de 3, y todas se ejecutan
-    concurrentemente con ThreadPoolExecutor(max_workers=8).
+    Cada ticker hace 2 llamadas HTTP (.info + history(1y)) y se ejecutan
+    concurrentemente con ThreadPoolExecutor(max_workers=3) — respeta el límite
+    del .cursorrules para Render (512MB RAM).
     """
     entries = (
         db.query(WatchlistTicker)

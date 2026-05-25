@@ -62,12 +62,19 @@ def _ema(series: pd.Series, span: int) -> pd.Series:
 
 
 def _fetch_fundamentals_batch(tickers: list[str]) -> dict[str, dict[str, Any]]:
+    """
+    Obtiene fundamentals de N tickers en paralelo.
+    Patrón correcto: cada worker dispara su request .info INMEDIATAMENTE (sin sleep antes),
+    para que los 3 workers del ThreadPool corran en verdadero paralelo.
+    El throttle (si fuera necesario) se aplicaría DESPUÉS de .info, no antes.
+    """
     results: dict[str, dict[str, Any]] = {}
 
     def fetch_one(ticker: str):
-        time.sleep(0.3 + random.uniform(0, 0.4))
         try:
             info = yf.Ticker(ticker).info
+            # Jitter ligero post-fetch para espaciar requests subsecuentes del mismo worker.
+            time.sleep(0.2 + random.uniform(0, 0.3))
             return ticker, {
                 "name": info.get("shortName") or info.get("longName", ""),
                 "sector": info.get("sector") or "",

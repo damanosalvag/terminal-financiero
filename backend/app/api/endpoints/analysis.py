@@ -11,9 +11,10 @@ from datetime import datetime, timezone
 import pandas as pd
 import requests
 import yfinance as yf
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
-from app.infrastructure.market_data import YahooFinanceClient
+from app.core.response_cache import cached_response
+from app.infrastructure.market_data import market_client
 from app.services.finance_math import (
     calculate_graham_number,
     calculate_historical_multiple_value,
@@ -27,8 +28,6 @@ except ImportError:
     get_strategic_intel = None  # type: ignore[assignment]
 
 router = APIRouter(prefix="/analysis", tags=["Analysis"])
-
-market_client = YahooFinanceClient()
 
 _DAYS_EARNINGS_WARNING = 7
 
@@ -171,7 +170,10 @@ def get_narrative(ticker: str):
 
 
 @router.get("/market-heatmap")
+@cached_response(open_ttl=60, closed_ttl=600)
 def get_market_heatmap(
+    request: Request,
+    response: Response,
     market: str = Query("sp500", description="Market: sp500, dow, nasdaq, russell"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     limit: int = Query(100, ge=10, le=200, description="Max tickers per request"),

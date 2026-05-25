@@ -1,7 +1,6 @@
 "use client";
 
 import { FormEvent, useState } from "react";
-import { useRouter } from "next/navigation";
 
 interface TokenResponse {
   access_token: string;
@@ -9,7 +8,8 @@ interface TokenResponse {
 }
 
 export default function LoginPage() {
-  const router = useRouter();
+  // Nota: no usamos useRouter() porque después del login hacemos hard navigation
+  // con window.location.href para que el middleware vea la cookie en el request HTTP.
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");

@@ -4,18 +4,17 @@ Orquesta las llamadas entre la base de datos, los servicios de matemática finan
 y el cliente de datos de mercado. La lógica de negocio vive en /services, no aquí.
 """
 
-import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 
-import random
-from concurrent.futures import ThreadPoolExecutor
-
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
-from app.infrastructure.market_data import YahooFinanceClient
+from app.core.response_cache import cached_response, invalidate_endpoint
+from app.infrastructure.market_data import market_client
 from app.models.portfolio import PortfolioPosition
 from app.schemas.portfolio import (
     PortfolioSummaryResponse,
@@ -40,14 +39,6 @@ except ImportError:
     analyze_portfolio_news = None  # type: ignore[assignment]
 
 router = APIRouter(prefix="/portfolio", tags=["Portfolio"])
-
-# Cliente de mercado instanciado a nivel de módulo.
-# Si se cambia de proveedor, solo se reemplaza esta línea.
-market_client = YahooFinanceClient()
-
-# Caché de sectores exitosos en memoria (los sectores rara vez cambian).
-# Solo se cachean éxitos — los fallos NO se cachean para permitir reintentos.
-_sector_cache: dict[str, str] = {}
 
 
 @router.post("/", response_model=PositionResponse, status_code=201)
@@ -90,6 +81,7 @@ def create_position(
         db.refresh(existing)
         if response is not None:
             response.status_code = 200
+        invalidate_endpoint("portfolio")
         return PositionResponse.model_validate(existing)
 
     # Ticker nuevo: crear posición normalmente
@@ -99,6 +91,7 @@ def create_position(
     db.add(position)
     db.commit()
     db.refresh(position)
+    invalidate_endpoint("portfolio")
     return PositionResponse.model_validate(position)
 
 
@@ -116,16 +109,137 @@ def list_positions(
     return [PositionResponse.model_validate(p) for p in positions]
 
 
+def _analyze_one_position(
+    position: PortfolioPosition,
+    historical_close: list[float],
+    now: datetime,
+) -> PositionAnalysisResponse | None:
+    """
+    Procesa una posición: usa OHLCV pre-cargado del batch, y consulta en paralelo
+    info_batch (sector/target/beta) + dividends_since. Calcula todas las métricas.
+
+    Retorna None si no hay suficientes datos para esa posición.
+    """
+    if not historical_close or len(historical_close) < 2:
+        return None
+
+    # Precio actual: durante mercado abierto, history(1y) ya incluye la barra del día
+    # con su Close actualizado. Si el cache de precio intradía está fresco, lo preferimos
+    # (más actualizado que la barra diaria intradía durante horario de mercado).
+    try:
+        current_price = market_client.get_current_price(position.ticker)
+    except ValueError:
+        # Fallback: usar el último cierre del batch (puede ser de ayer si pre-market)
+        current_price = historical_close[-1]
+
+    # Las dos llamadas restantes son independientes — ejecutar en paralelo:
+    # - get_dividends_since: cache 6h
+    # - get_info_batch:      cache 6h
+    with ThreadPoolExecutor(max_workers=2) as ex:
+        fut_div = ex.submit(market_client.get_dividends_since, position.ticker, position.buy_date)
+        fut_info = ex.submit(
+            market_client.get_info_batch, position.ticker, current_price
+        )
+        try:
+            dividends_per_share: float = fut_div.result()
+        except Exception:
+            dividends_per_share = 0.0
+        try:
+            ticker_info: dict = fut_info.result()
+        except Exception:
+            ticker_info = {"sector": "Unknown", "target_mean_price": None, "beta": None}
+
+    current_rsi = calculate_rsi(historical_close)
+
+    # Daily change %
+    daily_change_pct: float | None = None
+    prev = historical_close[-2]
+    last = historical_close[-1]
+    if prev > 0:
+        daily_change_pct = round(((last - prev) / prev) * 100, 2)
+
+    commission_per_share = position.commission / position.quantity
+    days_held = calculate_days_held(position.buy_date, now)
+
+    target_exit = calculate_target_exit_price(
+        buy_price=position.buy_price,
+        commission=commission_per_share,
+        target_annual_yield=position.target_annual_yield,
+        days_held=days_held,
+        estimated_inflation=position.estimated_inflation,
+        dividends_collected=dividends_per_share,
+    )
+
+    utility_pct = calculate_current_utility_percentage(
+        buy_price=position.buy_price,
+        current_price=current_price,
+        commission=commission_per_share,
+        estimated_inflation=position.estimated_inflation,
+        days_held=days_held,
+        dividends_collected=dividends_per_share,
+    )
+
+    target_mean_price: float | None = ticker_info.get("target_mean_price")
+    beta_val: float | None = ticker_info.get("beta")
+    sector: str = ticker_info.get("sector", "Unknown") or "Unknown"
+
+    heartbeat_days, sigma = calculate_volatility_regime(historical_close)
+    volatility_window: int = int(max(21, 2 * heartbeat_days))
+
+    target_probability = calculate_target_probability(
+        target_exit_price=target_exit,
+        current_price=current_price,
+        target_mean_price=target_mean_price,
+        days_held=heartbeat_days,
+        beta=beta_val,
+        sigma=sigma,
+    )
+
+    return PositionAnalysisResponse(
+        id=position.id,
+        ticker=position.ticker,
+        quantity=position.quantity,
+        buy_price=position.buy_price,
+        currency=position.currency,
+        buy_date=position.buy_date,
+        commission=position.commission,
+        estimated_inflation=position.estimated_inflation,
+        target_annual_yield=position.target_annual_yield,
+        is_active=position.is_active,
+        exit_price=position.exit_price,
+        exit_date=position.exit_date,
+        current_price=current_price,
+        dividends_collected=dividends_per_share,
+        days_held=days_held,
+        target_exit_price=target_exit,
+        current_utility_percentage=utility_pct,
+        current_rsi=current_rsi,
+        sector=sector,
+        daily_change_pct=daily_change_pct,
+        target_probability=target_probability,
+        heartbeat_days=heartbeat_days,
+        volatility_window=volatility_window,
+    )
+
+
 @router.get("/summary", response_model=PortfolioSummaryResponse)
+@cached_response(open_ttl=30, closed_ttl=300)
 def portfolio_summary(
+    request: Request,
+    response: Response,
     db: Session = Depends(get_db),
 ) -> PortfolioSummaryResponse:
     """
     Analiza el portafolio completo: calcula capital invertido total, valor actual
     total y el porcentaje de utilidad global ponderada.
 
-    Itera sobre todas las posiciones activas. Si un ticker falla al consultar
-    el precio de mercado, se omite esa posición individual sin detener el resumen.
+    Optimizaciones:
+    1. Batch OHLCV: una sola request a yf.download() trae 1y de todas las posiciones.
+    2. Singleton client: caches compartidas con watchlist y analysis.
+    3. ThreadPoolExecutor(max_workers=3) procesa N posiciones concurrentemente.
+       Cada posición a su vez paraleliza dividends + info_batch internamente.
+
+    Si un ticker falla, se omite sin detener el resumen del resto.
     """
     positions = (
         db.query(PortfolioPosition)
@@ -134,116 +248,46 @@ def portfolio_summary(
         .all()
     )
 
-    analyzed: list[PositionAnalysisResponse] = []
-    total_invested = 0.0
-    total_current = 0.0
+    if not positions:
+        return PortfolioSummaryResponse(
+            total_invested_capital=0.0,
+            total_current_value=0.0,
+            global_utility_percentage=0.0,
+            positions=[],
+        )
+
     now = datetime.now(timezone.utc)
 
-    for i, position in enumerate(positions):
-        # Throttle con jitter entre tickers: se salta el primero para no añadir
-        # latencia innecesaria al inicio de la carga del portafolio.
-        if i > 0:
-            time.sleep(0.5 + random.uniform(0, 0.5))
+    # 1) BATCH OHLCV: una sola request HTTP trae 1y de TODOS los tickers.
+    #    Reemplaza N × get_historical_prices secuenciales por 1 batch.
+    unique_tickers = list({p.ticker for p in positions})
+    batch_ohlcv = market_client.download_batch_history(unique_tickers, period="1y")
 
+    # 2) Procesar cada posición en paralelo (max 3 workers).
+    #    Cada worker reusa el OHLCV pre-cargado y hace solo 2 calls extra
+    #    (dividends + info_batch), también en paralelo internamente.
+    def process(position: PortfolioPosition) -> PositionAnalysisResponse | None:
         try:
-            current_price = market_client.get_current_price(position.ticker)
-            dividends_per_share = market_client.get_dividends_since(
-                position.ticker, position.buy_date
+            return _analyze_one_position(
+                position=position,
+                historical_close=batch_ohlcv.get(position.ticker, []),
+                now=now,
             )
-            historical_close = market_client.get_historical_prices(position.ticker, period="1y")
-            current_rsi = calculate_rsi(historical_close)
-        except ValueError:
-            continue
+        except Exception:
+            return None
 
-        # Daily change: diferencia porcentual entre el último y penúltimo cierre
-        daily_change_pct: float | None = None
-        if historical_close and len(historical_close) >= 2:
-            prev = historical_close[-2]
-            last = historical_close[-1]
-            if prev > 0:
-                daily_change_pct = round(((last - prev) / prev) * 100, 2)
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        results = list(executor.map(process, positions))
 
-        # Una sola llamada a .info obtiene sector, target y beta.
-        # get_info_batch() usa caché de sector exitoso y degrada elegantemente.
-        ticker_info = market_client.get_info_batch(position.ticker, current_price=current_price)
-        sector = ticker_info["sector"]
-        # Cachear solo sectores válidos (no "Unknown") para evitar contaminación de caché
-        if sector and sector != "Unknown":
-            _sector_cache[position.ticker] = sector
-        elif position.ticker in _sector_cache:
-            sector = _sector_cache[position.ticker]
+    analyzed: list[PositionAnalysisResponse] = [r for r in results if r is not None]
 
-        commission_per_share = position.commission / position.quantity
-        days_held = calculate_days_held(position.buy_date, now)
-
-        target_exit = calculate_target_exit_price(
-            buy_price=position.buy_price,
-            commission=commission_per_share,
-            target_annual_yield=position.target_annual_yield,
-            days_held=days_held,
-            estimated_inflation=position.estimated_inflation,
-            dividends_collected=dividends_per_share,
-        )
-
-        utility_pct = calculate_current_utility_percentage(
-            buy_price=position.buy_price,
-            current_price=current_price,
-            commission=commission_per_share,
-            estimated_inflation=position.estimated_inflation,
-            days_held=days_held,
-            dividends_collected=dividends_per_share,
-        )
-
-        invested = position.buy_price * position.quantity + position.commission
-        current_value = current_price * position.quantity + dividends_per_share * position.quantity
-
+    total_invested = 0.0
+    total_current = 0.0
+    for r in analyzed:
+        invested = r.buy_price * r.quantity + r.commission
+        current_value = r.current_price * r.quantity + r.dividends_collected * r.quantity
         total_invested += invested
         total_current += current_value
-
-        # Probabilidad de alcanzar el precio objetivo (modelo híbrido log-normal + penalización analistas)
-        target_mean_price: float | None = ticker_info["target_mean_price"]
-        beta_val: float | None = ticker_info["beta"]
-
-        # Régimen de volatilidad: heartbeat + sigma dinámico basado en anomalías
-        heartbeat_days, sigma = calculate_volatility_regime(historical_close)
-        volatility_window: int = int(max(21, 2 * heartbeat_days))
-
-        target_probability = calculate_target_probability(
-            target_exit_price=target_exit,
-            current_price=current_price,
-            target_mean_price=target_mean_price,
-            days_held=heartbeat_days,
-            beta=beta_val,
-            sigma=sigma,
-        )
-
-        analyzed.append(
-            PositionAnalysisResponse(
-                id=position.id,
-                ticker=position.ticker,
-                quantity=position.quantity,
-                buy_price=position.buy_price,
-                currency=position.currency,
-                buy_date=position.buy_date,
-                commission=position.commission,
-                estimated_inflation=position.estimated_inflation,
-                target_annual_yield=position.target_annual_yield,
-                is_active=position.is_active,
-                exit_price=position.exit_price,
-                exit_date=position.exit_date,
-                current_price=current_price,
-                dividends_collected=dividends_per_share,
-                days_held=days_held,
-                target_exit_price=target_exit,
-                current_utility_percentage=utility_pct,
-                current_rsi=current_rsi,
-                sector=sector,
-                daily_change_pct=daily_change_pct,
-                target_probability=target_probability,
-                heartbeat_days=heartbeat_days,
-                volatility_window=volatility_window,
-            )
-        )
 
     global_utility = (
         ((total_current - total_invested) / total_invested * 100.0)
@@ -275,11 +319,12 @@ def position_history(
         .all()
     )
 
-    # Comisiones de TODAS las posiciones (activas + cerradas)
-    total_commissions = db.query(PortfolioPosition).with_entities(
-        PortfolioPosition.commission
-    ).all()
-    total_commissions_paid = round(sum(float(c[0]) for c in total_commissions), 2)
+    # Comisiones de TODAS las posiciones (activas + cerradas) — agregado SQL,
+    # evita traer cada fila a Python para sumar.
+    total_commissions_sum: float | None = db.query(
+        func.sum(PortfolioPosition.commission)
+    ).scalar()
+    total_commissions_paid = round(float(total_commissions_sum or 0.0), 2)
 
     history_items: list[PositionHistoryItem] = []
     total_realized = 0.0
@@ -451,6 +496,7 @@ def close_position(
 
     db.commit()
     db.refresh(position)
+    invalidate_endpoint("portfolio")
     return PositionResponse.model_validate(position)
 
 

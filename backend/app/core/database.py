@@ -10,6 +10,9 @@ engine = create_engine(
     pool_size=5,
     max_overflow=10,
     pool_pre_ping=True,
+    # Supabase cierra conexiones idle ~5min. Reciclar antes evita errores
+    # "server closed the connection unexpectedly" tras periodos de inactividad.
+    pool_recycle=300,
     connect_args={"connect_timeout": 10},
 )
 

@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, HTTPException, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 
 from app.api.endpoints.analysis import router as analysis_router
@@ -97,6 +98,10 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# GZip: comprime respuestas > 1KB. Reduce payload de /portfolio/summary
+# (decenas de KB con 20+ posiciones) y /analysis/market-heatmap.
+app.add_middleware(GZipMiddleware, minimum_size=1024)
 
 app.include_router(auth_router)
 app.include_router(portfolio_router)
